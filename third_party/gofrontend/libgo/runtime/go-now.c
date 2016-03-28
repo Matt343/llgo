@@ -13,11 +13,11 @@
 struct time_now_ret
 now()
 {
-  struct timespec ts;
+  struct timeval tv;
   struct time_now_ret ret;
 
-  clock_gettime (CLOCK_REALTIME, &ts);
-  ret.sec = ts.tv_sec;
-  ret.nsec = ts.tv_nsec;
+  gettimeofday (&tv, NULL);
+  ret.sec = tv.tv_sec;
+  ret.nsec = tv.tv_usec * 1000;
   return ret;
 }

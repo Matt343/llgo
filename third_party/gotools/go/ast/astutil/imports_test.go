@@ -6,9 +6,9 @@ package astutil
 
 import (
 	"bytes"
-	"go/ast"
+	"llvm.org/llgo/third_party/gc/go/ast"
 	"go/format"
-	"go/parser"
+	"llvm.org/llgo/third_party/gc/go/parser"
 	"go/token"
 	"reflect"
 	"strconv"

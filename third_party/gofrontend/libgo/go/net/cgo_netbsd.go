@@ -9,6 +9,8 @@ package net
 /*
 #include <netdb.h>
 */
-import "syscall"
+import "C"
 
-const cgoAddrInfoFlags = syscall.AI_CANONNAME
+func cgoAddrInfoFlags() int {
+	return C.AI_CANONNAME
+}

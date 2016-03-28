@@ -6,7 +6,7 @@
 
 package types
 
-import "go/ast"
+import "llvm.org/llgo/third_party/gc/go/ast"
 
 func slice3(x *ast.SliceExpr) bool {
 	return x.Slice3

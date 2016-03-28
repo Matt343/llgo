@@ -8,7 +8,7 @@ package types
 
 import (
 	"fmt"
-	"go/ast"
+	"llvm.org/llgo/third_party/gc/go/ast"
 	"go/token"
 
 	"llvm.org/llgo/third_party/gotools/go/exact"

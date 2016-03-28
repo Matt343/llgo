@@ -5,9 +5,9 @@
 package loader
 
 import (
-	"go/ast"
+	"llvm.org/llgo/third_party/gc/go/ast"
 	"go/build"
-	"go/parser"
+	"llvm.org/llgo/third_party/gc/go/parser"
 	"go/token"
 	"io"
 	"os"

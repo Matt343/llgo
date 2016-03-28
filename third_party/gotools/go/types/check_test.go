@@ -27,8 +27,8 @@ package types_test
 
 import (
 	"flag"
-	"go/ast"
-	"go/parser"
+	"llvm.org/llgo/third_party/gc/go/ast"
+	"llvm.org/llgo/third_party/gc/go/parser"
 	"go/scanner"
 	"go/token"
 	"io/ioutil"

@@ -8,8 +8,8 @@ package ssa
 
 import (
 	"fmt"
-	"go/ast"
 	"go/token"
+	"llvm.org/llgo/third_party/gc/go/ast"
 
 	"llvm.org/llgo/third_party/gotools/go/types"
 )
@@ -178,6 +178,13 @@ func emitConv(f *Function, val Value, typ types.Type) Value {
 	if types.Identical(t_src, typ) {
 		return val
 	}
+
+	// if g_dst, ok := typ.(*Named); ok && g_dst.context != nil {
+	// 	typ = typ.Underlying()
+	// }
+	// if g_src, ok := t_src.(*Named); ok && g_src.context != nil {
+	// 	t_src = t_src.Underlying()
+	// }
 
 	ut_dst := typ.Underlying()
 	ut_src := t_src.Underlying()

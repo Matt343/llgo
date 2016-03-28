@@ -453,30 +453,29 @@ const (
 	encImaginaryFloat = 0x09
 )
 
-// Statement program standard opcode encodings.
+// Line number opcodes.
 const (
-	lnsCopy           = 1
-	lnsAdvancePC      = 2
-	lnsAdvanceLine    = 3
-	lnsSetFile        = 4
-	lnsSetColumn      = 5
-	lnsNegateStmt     = 6
-	lnsSetBasicBlock  = 7
-	lnsConstAddPC     = 8
-	lnsFixedAdvancePC = 9
-
-	// DWARF 3
-	lnsSetPrologueEnd   = 10
-	lnsSetEpilogueBegin = 11
-	lnsSetISA           = 12
+	LineExtendedOp     = 0
+	LineCopy           = 1
+	LineAdvancePC      = 2
+	LineAdvanceLine    = 3
+	LineSetFile        = 4
+	LineSetColumn      = 5
+	LineNegateStmt     = 6
+	LineSetBasicBlock  = 7
+	LineConstAddPC     = 8
+	LineFixedAdvancePC = 9
+	// next 3 are DWARF 3
+	LineSetPrologueEnd   = 10
+	LineSetEpilogueBegin = 11
+	LineSetISA           = 12
 )
 
-// Statement program extended opcode encodings.
+// Line number extended opcodes.
 const (
-	lneEndSequence = 1
-	lneSetAddress  = 2
-	lneDefineFile  = 3
-
-	// DWARF 4
-	lneSetDiscriminator = 4
+	LineExtEndSequence = 1
+	LineExtSetAddress  = 2
+	LineExtDefineFile  = 3
+	// next 1 is DWARF 4
+	LineExtSetDiscriminator = 4
 )

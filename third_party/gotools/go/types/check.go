@@ -7,15 +7,15 @@
 package types
 
 import (
-	"go/ast"
 	"go/token"
+	"llvm.org/llgo/third_party/gc/go/ast"
 
 	"llvm.org/llgo/third_party/gotools/go/exact"
 )
 
 // debugging/development support
 const (
-	debug = false // leave on during development
+	debug = true  // leave on during development
 	trace = false // turn on for detailed type resolution traces
 )
 
@@ -268,7 +268,6 @@ func (check *Checker) recordTypeAndValue(x ast.Expr, mode operandMode, typ Type,
 	if mode == invalid {
 		return // omit
 	}
-	assert(typ != nil)
 	if mode == constant {
 		assert(val != nil)
 		assert(typ == Typ[Invalid] || isConstType(typ))

@@ -223,6 +223,7 @@ func Getdents(fd int, buf []byte) (n int, err error) {
 	} else {
 		p = (*byte)(unsafe.Pointer(&_zero))
 	}
+	Entersyscall()
 	s := SYS_GETDENTS64
 	if s == 0 {
 		s = SYS_GETDENTS
@@ -232,6 +233,7 @@ func Getdents(fd int, buf []byte) (n int, err error) {
 	if n < 0 {
 		err = errno
 	}
+	Exitsyscall()
 	return
 }
 
@@ -327,7 +329,6 @@ func Sendfile(outfd int, infd int, offset *int64, count int) (written int, err e
 	var soff Offset_t
 	var psoff *Offset_t
 	if offset != nil {
-		soff = Offset_t(*offset)
 		psoff = &soff
 	}
 	written, err = sendfile(outfd, infd, psoff, count)
@@ -409,3 +410,6 @@ func Unlinkat(dirfd int, path string) (err error) {
 
 //sys	Unshare(flags int) (err error)
 //unshare(flags _C_int) _C_int
+
+//sys	Ustat(dev int, ubuf *Ustat_t) (err error)
+//ustat(dev _dev_t, ubuf *Ustat_t) _C_int

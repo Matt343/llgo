@@ -13,7 +13,7 @@ package loader_test
 import (
 	"bytes"
 	"fmt"
-	"go/ast"
+	"llvm.org/llgo/third_party/gc/go/ast"
 	"go/build"
 	"go/token"
 	"io/ioutil"

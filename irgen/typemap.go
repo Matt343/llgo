@@ -71,20 +71,13 @@ type TypeMap struct {
 
 	typeSliceType, methodSliceType, imethodSliceType, structFieldSliceType llvm.Type
 
-	funcValType             llvm.Type
 	hashFnType, equalFnType llvm.Type
 
-	algsEmptyInterface,
-	algsInterface,
-	algsFloat,
-	algsComplex,
-	algsString,
-	algsIdentity,
-	algsError algorithms
-}
+	hashFnEmptyInterface, hashFnInterface, hashFnFloat, hashFnComplex, hashFnString, hashFnIdentity, hashFnError        llvm.Value
+	equalFnEmptyInterface, equalFnInterface, equalFnFloat, equalFnComplex, equalFnString, equalFnIdentity, equalFnError llvm.Value
 
-type algorithms struct {
-	hash, hashDescriptor, equal, equalDescriptor llvm.Value
+	zeroType  llvm.Type
+	zeroValue llvm.Value
 }
 
 func NewLLVMTypeMap(ctx llvm.Context, target llvm.TargetData) *llvmTypeMap {
@@ -124,38 +117,35 @@ func NewTypeMap(pkg *ssa.Package, llvmtm *llvmTypeMap, module llvm.Module, r *ru
 	boolType := llvm.Int8Type()
 	stringPtrType := llvm.PointerType(tm.stringType, 0)
 
-	tm.funcValType = tm.ctx.StructCreateNamed("funcVal")
-	tm.funcValType.StructSetBody([]llvm.Type{
-		llvm.PointerType(llvm.FunctionType(llvm.VoidType(), []llvm.Type{}, false), 0),
-	}, false)
-
+	// Create runtime algorithm function types.
 	params := []llvm.Type{voidPtrType, uintptrType}
 	tm.hashFnType = llvm.FunctionType(uintptrType, params, false)
 	params = []llvm.Type{voidPtrType, voidPtrType, uintptrType}
 	tm.equalFnType = llvm.FunctionType(boolType, params, false)
 
-	typeAlgorithms := [...]struct {
-		Name string
-		*algorithms
-	}{
-		{"empty_interface", &tm.algsEmptyInterface},
-		{"interface", &tm.algsInterface},
-		{"float", &tm.algsFloat},
-		{"complex", &tm.algsComplex},
-		{"string", &tm.algsString},
-		{"identity", &tm.algsIdentity},
-		{"error", &tm.algsError},
-	}
-	for _, typeAlgs := range typeAlgorithms {
-		hashFnName := "__go_type_hash_" + typeAlgs.Name
-		hashDescriptorName := hashFnName + "_descriptor"
-		equalFnName := "__go_type_equal_" + typeAlgs.Name
-		equalDescriptorName := equalFnName + "_descriptor"
-		typeAlgs.hash = llvm.AddGlobal(tm.module, tm.hashFnType, hashFnName)
-		typeAlgs.hashDescriptor = llvm.AddGlobal(tm.module, tm.funcValType, hashDescriptorName)
-		typeAlgs.equal = llvm.AddGlobal(tm.module, tm.equalFnType, equalFnName)
-		typeAlgs.equalDescriptor = llvm.AddGlobal(tm.module, tm.funcValType, equalDescriptorName)
-	}
+	tm.hashFnEmptyInterface = llvm.AddFunction(tm.module, "__go_type_hash_empty_interface", tm.hashFnType)
+	tm.hashFnInterface = llvm.AddFunction(tm.module, "__go_type_hash_interface", tm.hashFnType)
+	tm.hashFnFloat = llvm.AddFunction(tm.module, "__go_type_hash_float", tm.hashFnType)
+	tm.hashFnComplex = llvm.AddFunction(tm.module, "__go_type_hash_complex", tm.hashFnType)
+	tm.hashFnString = llvm.AddFunction(tm.module, "__go_type_hash_string", tm.hashFnType)
+	tm.hashFnIdentity = llvm.AddFunction(tm.module, "__go_type_hash_identity", tm.hashFnType)
+	tm.hashFnError = llvm.AddFunction(tm.module, "__go_type_hash_error", tm.hashFnType)
+
+	tm.equalFnEmptyInterface = llvm.AddFunction(tm.module, "__go_type_equal_empty_interface", tm.equalFnType)
+	tm.equalFnInterface = llvm.AddFunction(tm.module, "__go_type_equal_interface", tm.equalFnType)
+	tm.equalFnFloat = llvm.AddFunction(tm.module, "__go_type_equal_float", tm.equalFnType)
+	tm.equalFnComplex = llvm.AddFunction(tm.module, "__go_type_equal_complex", tm.equalFnType)
+	tm.equalFnString = llvm.AddFunction(tm.module, "__go_type_equal_string", tm.equalFnType)
+	tm.equalFnIdentity = llvm.AddFunction(tm.module, "__go_type_equal_identity", tm.equalFnType)
+	tm.equalFnError = llvm.AddFunction(tm.module, "__go_type_equal_error", tm.equalFnType)
+
+	// The body of this type is set in emitTypeDescInitializers once we have scanned
+	// every type, as it needs to be as large and well aligned as the
+	// largest/most aligned type.
+	tm.zeroType = tm.ctx.StructCreateNamed("zero")
+	tm.zeroValue = llvm.AddGlobal(tm.module, tm.zeroType, "go$zerovalue")
+	tm.zeroValue.SetLinkage(llvm.CommonLinkage)
+	tm.zeroValue.SetInitializer(llvm.ConstNull(tm.zeroType))
 
 	tm.commonTypeType = tm.ctx.StructCreateNamed("commonType")
 	commonTypeTypePtr := llvm.PointerType(tm.commonTypeType, 0)
@@ -184,12 +174,13 @@ func NewTypeMap(pkg *ssa.Package, llvmtm *llvmTypeMap, module llvm.Module, r *ru
 		tm.ctx.Int8Type(),                        // fieldAlign
 		uintptrType,                              // size
 		tm.ctx.Int32Type(),                       // hash
-		llvm.PointerType(tm.funcValType, 0),      // hashfn
-		llvm.PointerType(tm.funcValType, 0),      // equalfn
+		llvm.PointerType(tm.hashFnType, 0),       // hashfn
+		llvm.PointerType(tm.equalFnType, 0),      // equalfn
 		voidPtrType,                              // gc
 		stringPtrType,                            // string
 		llvm.PointerType(tm.uncommonTypeType, 0), // uncommonType
 		commonTypeTypePtr,                        // ptrToThis
+		llvm.PointerType(tm.zeroType, 0),         // zero
 	}, false)
 
 	tm.typeSliceType = tm.makeNamedSliceType("typeSlice", commonTypeTypePtr)
@@ -1105,6 +1096,9 @@ func (tm *TypeMap) emitTypeDescInitializers() {
 			}
 		}
 	}
+
+	tm.zeroType.StructSetBody([]llvm.Type{llvm.ArrayType(tm.ctx.Int8Type(), int(maxSize))}, false)
+	tm.zeroValue.SetAlignment(int(maxAlign))
 }
 
 const (
@@ -1240,20 +1234,24 @@ func (tm *TypeMap) makeTypeDescInitializer(t types.Type) llvm.Value {
 	}
 }
 
-func (tm *TypeMap) getStructAlgorithms(st *types.Struct) algorithms {
-	if algs, ok := tm.algs.At(st).(algorithms); ok {
-		return algs
+type algorithmFns struct {
+	hash, equal llvm.Value
+}
+
+func (tm *TypeMap) getStructAlgorithmFunctions(st *types.Struct) (hash, equal llvm.Value) {
+	if algs, ok := tm.algs.At(st).(algorithmFns); ok {
+		return algs.hash, algs.equal
 	}
 
 	hashes := make([]llvm.Value, st.NumFields())
 	equals := make([]llvm.Value, st.NumFields())
 
 	for i := range hashes {
-		algs := tm.getAlgorithms(st.Field(i).Type())
-		if algs.hashDescriptor == tm.algsError.hashDescriptor {
-			return algs
+		fhash, fequal := tm.getAlgorithmFunctions(st.Field(i).Type())
+		if fhash == tm.hashFnError {
+			return fhash, fequal
 		}
-		hashes[i], equals[i] = algs.hash, algs.equal
+		hashes[i], equals[i] = fhash, fequal
 	}
 
 	i8ptr := llvm.PointerType(tm.ctx.Int8Type(), 0)
@@ -1262,11 +1260,8 @@ func (tm *TypeMap) getStructAlgorithms(st *types.Struct) algorithms {
 	builder := tm.ctx.NewBuilder()
 	defer builder.Dispose()
 
-	hashFunctionName := tm.mc.mangleHashFunctionName(st)
-	hash := llvm.AddFunction(tm.module, hashFunctionName, tm.hashFnType)
+	hash = llvm.AddFunction(tm.module, tm.mc.mangleHashFunctionName(st), tm.hashFnType)
 	hash.SetLinkage(llvm.LinkOnceODRLinkage)
-	hashDescriptor := tm.createAlgorithmDescriptor(hashFunctionName+"_descriptor", hash)
-
 	builder.SetInsertPointAtEnd(llvm.AddBasicBlock(hash, "entry"))
 	sptr := builder.CreateBitCast(hash.Param(0), llsptrty, "")
 
@@ -1276,7 +1271,9 @@ func (tm *TypeMap) getStructAlgorithms(st *types.Struct) algorithms {
 	for i, fhash := range hashes {
 		fptr := builder.CreateStructGEP(sptr, i, "")
 		fptr = builder.CreateBitCast(fptr, i8ptr, "")
+
 		fsize := llvm.ConstInt(tm.inttype, uint64(tm.sizes.Sizeof(st.Field(i).Type())), false)
+
 		hashcall := builder.CreateCall(fhash, []llvm.Value{fptr, fsize}, "")
 		hashval = builder.CreateMul(hashval, i33, "")
 		hashval = builder.CreateAdd(hashval, hashcall, "")
@@ -1284,13 +1281,11 @@ func (tm *TypeMap) getStructAlgorithms(st *types.Struct) algorithms {
 
 	builder.CreateRet(hashval)
 
-	equalFunctionName := tm.mc.mangleEqualFunctionName(st)
-	equal := llvm.AddFunction(tm.module, equalFunctionName, tm.equalFnType)
+	equal = llvm.AddFunction(tm.module, tm.mc.mangleEqualFunctionName(st), tm.equalFnType)
 	equal.SetLinkage(llvm.LinkOnceODRLinkage)
-	equalDescriptor := tm.createAlgorithmDescriptor(equalFunctionName+"_descriptor", equal)
-
 	eqentrybb := llvm.AddBasicBlock(equal, "entry")
 	eqretzerobb := llvm.AddBasicBlock(equal, "retzero")
+
 	builder.SetInsertPointAtEnd(eqentrybb)
 	s1ptr := builder.CreateBitCast(equal.Param(0), llsptrty, "")
 	s2ptr := builder.CreateBitCast(equal.Param(1), llsptrty, "")
@@ -1303,11 +1298,15 @@ func (tm *TypeMap) getStructAlgorithms(st *types.Struct) algorithms {
 		f1ptr = builder.CreateBitCast(f1ptr, i8ptr, "")
 		f2ptr := builder.CreateStructGEP(s2ptr, i, "")
 		f2ptr = builder.CreateBitCast(f2ptr, i8ptr, "")
+
 		fsize := llvm.ConstInt(tm.inttype, uint64(tm.sizes.Sizeof(st.Field(i).Type())), false)
+
 		equalcall := builder.CreateCall(fequal, []llvm.Value{f1ptr, f2ptr, fsize}, "")
 		equaleqzero := builder.CreateICmp(llvm.IntEQ, equalcall, zerobool, "")
+
 		contbb := llvm.AddBasicBlock(equal, "cont")
 		builder.CreateCondBr(equaleqzero, eqretzerobb, contbb)
+
 		builder.SetInsertPointAtEnd(contbb)
 	}
 
@@ -1316,24 +1315,18 @@ func (tm *TypeMap) getStructAlgorithms(st *types.Struct) algorithms {
 	builder.SetInsertPointAtEnd(eqretzerobb)
 	builder.CreateRet(zerobool)
 
-	algs := algorithms{
-		hash:            hash,
-		hashDescriptor:  hashDescriptor,
-		equal:           equal,
-		equalDescriptor: equalDescriptor,
-	}
-	tm.algs.Set(st, algs)
-	return algs
+	tm.algs.Set(st, algorithmFns{hash, equal})
+	return
 }
 
-func (tm *TypeMap) getArrayAlgorithms(at *types.Array) algorithms {
-	if algs, ok := tm.algs.At(at).(algorithms); ok {
-		return algs
+func (tm *TypeMap) getArrayAlgorithmFunctions(at *types.Array) (hash, equal llvm.Value) {
+	if algs, ok := tm.algs.At(at).(algorithmFns); ok {
+		return algs.hash, algs.equal
 	}
 
-	elemAlgs := tm.getAlgorithms(at.Elem())
-	if elemAlgs.hashDescriptor == tm.algsError.hashDescriptor {
-		return elemAlgs
+	ehash, eequal := tm.getAlgorithmFunctions(at.Elem())
+	if ehash == tm.hashFnError {
+		return ehash, eequal
 	}
 
 	i8ptr := llvm.PointerType(tm.ctx.Int8Type(), 0)
@@ -1346,22 +1339,8 @@ func (tm *TypeMap) getArrayAlgorithms(at *types.Array) algorithms {
 	builder := tm.ctx.NewBuilder()
 	defer builder.Dispose()
 
-	hashFunctionName := tm.mc.mangleHashFunctionName(at)
-	hash := llvm.AddFunction(tm.module, hashFunctionName, tm.hashFnType)
+	hash = llvm.AddFunction(tm.module, tm.mc.mangleHashFunctionName(at), tm.hashFnType)
 	hash.SetLinkage(llvm.LinkOnceODRLinkage)
-	hashDescriptor := tm.createAlgorithmDescriptor(hashFunctionName+"_descriptor", hash)
-	equalFunctionName := tm.mc.mangleHashFunctionName(at)
-	equal := llvm.AddFunction(tm.module, equalFunctionName, tm.equalFnType)
-	equal.SetLinkage(llvm.LinkOnceODRLinkage)
-	equalDescriptor := tm.createAlgorithmDescriptor(equalFunctionName+"_descriptor", equal)
-	algs := algorithms{
-		hash:            hash,
-		hashDescriptor:  hashDescriptor,
-		equal:           equal,
-		equalDescriptor: equalDescriptor,
-	}
-	tm.algs.Set(at, algs)
-
 	hashentrybb := llvm.AddBasicBlock(hash, "entry")
 	builder.SetInsertPointAtEnd(hashentrybb)
 	if at.Len() == 0 {
@@ -1384,7 +1363,7 @@ func (tm *TypeMap) getArrayAlgorithms(at *types.Array) algorithms {
 		eptr := builder.CreateGEP(aptr, []llvm.Value{index}, "")
 		eptr = builder.CreateBitCast(eptr, i8ptr, "")
 
-		hashcall := builder.CreateCall(elemAlgs.hash, []llvm.Value{eptr, esize}, "")
+		hashcall := builder.CreateCall(ehash, []llvm.Value{eptr, esize}, "")
 		hashval = builder.CreateMul(hashval, i33, "")
 		hashval = builder.CreateAdd(hashval, hashcall, "")
 
@@ -1409,6 +1388,8 @@ func (tm *TypeMap) getArrayAlgorithms(at *types.Array) algorithms {
 	zerobool := llvm.ConstNull(tm.ctx.Int8Type())
 	onebool := llvm.ConstInt(tm.ctx.Int8Type(), 1, false)
 
+	equal = llvm.AddFunction(tm.module, tm.mc.mangleEqualFunctionName(at), tm.equalFnType)
+	equal.SetLinkage(llvm.LinkOnceODRLinkage)
 	eqentrybb := llvm.AddBasicBlock(equal, "entry")
 	builder.SetInsertPointAtEnd(eqentrybb)
 	if at.Len() == 0 {
@@ -1431,7 +1412,7 @@ func (tm *TypeMap) getArrayAlgorithms(at *types.Array) algorithms {
 		e2ptr := builder.CreateGEP(a2ptr, []llvm.Value{index}, "")
 		e2ptr = builder.CreateBitCast(e2ptr, i8ptr, "")
 
-		equalcall := builder.CreateCall(elemAlgs.equal, []llvm.Value{e1ptr, e2ptr, esize}, "")
+		equalcall := builder.CreateCall(eequal, []llvm.Value{e1ptr, e2ptr, esize}, "")
 		equaleqzero := builder.CreateICmp(llvm.IntEQ, equalcall, zerobool, "")
 
 		contbb := llvm.AddBasicBlock(equal, "cont")
@@ -1456,45 +1437,48 @@ func (tm *TypeMap) getArrayAlgorithms(at *types.Array) algorithms {
 		builder.CreateRet(zerobool)
 	}
 
-	return algs
+	tm.algs.Set(at, algorithmFns{hash, equal})
+	return
 }
 
-func (tm *TypeMap) createAlgorithmDescriptor(name string, fn llvm.Value) llvm.Value {
-	d := llvm.AddGlobal(tm.module, tm.funcValType, name)
-	d.SetLinkage(llvm.LinkOnceODRLinkage)
-	d.SetGlobalConstant(true)
-	fn = llvm.ConstBitCast(fn, tm.funcValType.StructElementTypes()[0])
-	init := llvm.ConstNull(tm.funcValType)
-	init = llvm.ConstInsertValue(init, fn, []uint32{0})
-	d.SetInitializer(init)
-	return d
-}
-
-func (tm *TypeMap) getAlgorithms(t types.Type) algorithms {
+func (tm *TypeMap) getAlgorithmFunctions(t types.Type) (hash, equal llvm.Value) {
 	switch t := t.Underlying().(type) {
 	case *types.Interface:
 		if t.NumMethods() == 0 {
-			return tm.algsEmptyInterface
+			hash = tm.hashFnEmptyInterface
+			equal = tm.equalFnEmptyInterface
+		} else {
+			hash = tm.hashFnInterface
+			equal = tm.equalFnInterface
 		}
-		return tm.algsInterface
 	case *types.Basic:
 		switch t.Kind() {
 		case types.Float32, types.Float64:
-			return tm.algsFloat
+			hash = tm.hashFnFloat
+			equal = tm.equalFnFloat
 		case types.Complex64, types.Complex128:
-			return tm.algsComplex
+			hash = tm.hashFnComplex
+			equal = tm.equalFnComplex
 		case types.String:
-			return tm.algsString
+			hash = tm.hashFnString
+			equal = tm.equalFnString
+		default:
+			hash = tm.hashFnIdentity
+			equal = tm.equalFnIdentity
 		}
-		return tm.algsIdentity
 	case *types.Signature, *types.Map, *types.Slice:
-		return tm.algsError
+		hash = tm.hashFnError
+		equal = tm.equalFnError
 	case *types.Struct:
-		return tm.getStructAlgorithms(t)
+		hash, equal = tm.getStructAlgorithmFunctions(t)
 	case *types.Array:
-		return tm.getArrayAlgorithms(t)
+		hash, equal = tm.getArrayAlgorithmFunctions(t)
+	default:
+		hash = tm.hashFnIdentity
+		equal = tm.equalFnIdentity
 	}
-	return tm.algsIdentity
+
+	return
 }
 
 func (tm *TypeMap) getTypeDescInfo(t types.Type) *typeDescInfo {
@@ -1720,26 +1704,27 @@ func runtimeTypeKind(t types.Type) (k uint8) {
 }
 
 func (tm *TypeMap) makeCommonType(t types.Type) llvm.Value {
-	var vals [11]llvm.Value
+	var vals [12]llvm.Value
 	vals[0] = llvm.ConstInt(tm.ctx.Int8Type(), uint64(runtimeTypeKind(t)), false)
 	vals[1] = llvm.ConstInt(tm.ctx.Int8Type(), uint64(tm.Alignof(t)), false)
 	vals[2] = vals[1]
 	vals[3] = llvm.ConstInt(tm.inttype, uint64(tm.Sizeof(t)), false)
 	vals[4] = llvm.ConstInt(tm.ctx.Int32Type(), uint64(tm.getTypeHash(t)), false)
-	algs := tm.getAlgorithms(t)
-	vals[5] = algs.hashDescriptor
-	vals[6] = algs.equalDescriptor
+	hash, equal := tm.getAlgorithmFunctions(t)
+	vals[5] = hash
+	vals[6] = equal
 	vals[7] = tm.getGcPointer(t)
 	var b bytes.Buffer
 	tm.writeType(t, &b)
 	vals[8] = tm.globalStringPtr(b.String())
 	vals[9] = tm.makeUncommonTypePtr(t)
-	switch t.(type) {
-	case *types.Named, *types.Struct:
+	if _, ok := t.(*types.Named); ok {
 		vals[10] = tm.getTypeDescriptorPointer(types.NewPointer(t))
-	default:
+	} else {
 		vals[10] = llvm.ConstPointerNull(llvm.PointerType(tm.commonTypeType, 0))
 	}
+	vals[11] = tm.zeroValue
+
 	return llvm.ConstNamedStruct(tm.commonTypeType, vals[:])
 }
 

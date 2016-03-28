@@ -487,6 +487,9 @@ func runPasses(opts *driverOptions, tm llvm.TargetMachine, m llvm.Module) {
 	pmb.SetOptLevel(opts.optLevel)
 	pmb.SetSizeLevel(opts.sizeLevel)
 
+	target := tm.TargetData()
+	mpm.Add(target)
+	fpm.Add(target)
 	tm.AddAnalysisPasses(mpm)
 	tm.AddAnalysisPasses(fpm)
 
@@ -743,7 +746,7 @@ func performAction(opts *driverOptions, kind actionKind, inputs []string, output
 			if opts.staticLibgo {
 				args = append(args, "-Wl,-Bstatic", "-lgo-llgo", "-Wl,-Bdynamic", "-lpthread", "-lm")
 			} else {
-				args = append(args, "-lgo-llgo", "-lm")
+				args = append(args, "-lgo-llgo")
 			}
 		} else {
 			linkerPath = opts.gccgoPath

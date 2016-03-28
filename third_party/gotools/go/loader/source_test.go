@@ -7,8 +7,8 @@ package loader_test
 // This file defines tests of source utilities.
 
 import (
-	"go/ast"
-	"go/parser"
+	"llvm.org/llgo/third_party/gc/go/ast"
+	"llvm.org/llgo/third_party/gc/go/parser"
 	"go/token"
 	"strings"
 	"testing"

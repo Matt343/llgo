@@ -9,9 +9,9 @@ package types_test
 
 import (
 	"fmt"
-	"go/ast"
+	"llvm.org/llgo/third_party/gc/go/ast"
 	"go/build"
-	"go/parser"
+	"llvm.org/llgo/third_party/gc/go/parser"
 	"go/scanner"
 	"go/token"
 	"io/ioutil"

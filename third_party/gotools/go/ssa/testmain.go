@@ -9,7 +9,7 @@ package ssa
 // It is closely coupled to $GOROOT/src/cmd/go/test.go and $GOROOT/src/testing.
 
 import (
-	"go/ast"
+	"llvm.org/llgo/third_party/gc/go/ast"
 	"go/token"
 	"os"
 	"sort"

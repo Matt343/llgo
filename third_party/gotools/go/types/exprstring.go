@@ -8,7 +8,7 @@ package types
 
 import (
 	"bytes"
-	"go/ast"
+	"llvm.org/llgo/third_party/gc/go/ast"
 )
 
 // ExprString returns the (possibly simplified) string representation for x.

@@ -4,7 +4,10 @@
 
 package types
 
-import "sort"
+import (
+	"llvm.org/llgo/third_party/gc/go/ast"
+	"sort"
+)
 
 // TODO(gri) Revisit factory functions - make sure they have all relevant parameters.
 
@@ -118,12 +121,32 @@ func NewSlice(elem Type) *Slice { return &Slice{elem} }
 // Elem returns the element type of slice s.
 func (s *Slice) Elem() Type { return s.elem }
 
+// A GenericType is parameterized by one or more other types.
+type GenericType interface {
+	TypeParams() []*TypeParameter
+}
+
+type TypeParameter struct {
+	bound    Type         // type bound for this parameter
+	methods  []*Func      // methods declared for this type (not the method set of this type)
+	variance ast.Variance // variance of this type parameter.
+	context  Type         // the signature, struct, or interface that this is a parameter to
+}
+
+func NewTypeParameter(obj *TypeName, bound Type, methods []*Func, variance ast.Variance, context Type) *Named {
+	named := NewNamed(obj, bound, methods)
+	named.variance = variance
+	named.context = context
+	return named
+}
+
 // A Struct represents a struct type.
 type Struct struct {
 	fields []*Var
 	tags   []string // field tags; nil if there are no tags
 	// TODO(gri) access to offsets is not threadsafe - fix this
-	offsets []int64 // field offsets in bytes, lazily initialized
+	offsets    []int64     // field offsets in bytes, lazily initialized
+	typeParams []*TypeName // type parameters for the struct; or nil
 }
 
 // NewStruct returns a new struct with the given fields and corresponding field tags.
@@ -131,6 +154,11 @@ type Struct struct {
 // only as long as required to hold the tag with the largest index i. Consequently,
 // if no field has a tag, tags may be nil.
 func NewStruct(fields []*Var, tags []string) *Struct {
+	return NewGenericStruct(nil, fields, tags)
+}
+
+// NewGenericStruct returns a new generic struct with the given fields and corresponding field tags.
+func NewGenericStruct(typeParams []*TypeName, fields []*Var, tags []string) *Struct {
 	var fset objset
 	for _, f := range fields {
 		if f.name != "_" && fset.insert(f) != nil {
@@ -140,7 +168,7 @@ func NewStruct(fields []*Var, tags []string) *Struct {
 	if len(tags) > len(fields) {
 		panic("more tags than fields")
 	}
-	return &Struct{fields: fields, tags: tags}
+	return &Struct{fields: fields, tags: tags, typeParams: typeParams}
 }
 
 // NumFields returns the number of fields in the struct (including blank and anonymous fields).
@@ -155,6 +183,10 @@ func (s *Struct) Tag(i int) string {
 		return s.tags[i]
 	}
 	return ""
+}
+
+func (s *Struct) TypeParams() []*TypeName {
+	return s.typeParams
 }
 
 // A Pointer represents a pointer type.
@@ -196,11 +228,12 @@ func (t *Tuple) At(i int) *Var { return t.vars[i] }
 
 // A Signature represents a (non-builtin) function or method type.
 type Signature struct {
-	scope    *Scope // function scope, always present
-	recv     *Var   // nil if not a method
-	params   *Tuple // (incoming) parameters from left to right; or nil
-	results  *Tuple // (outgoing) results from left to right; or nil
-	variadic bool   // true if the last parameter's type is of the form ...T (or string, for append built-in only)
+	scope      *Scope      // function scope, always present
+	recv       *Var        // nil if not a method
+	params     *Tuple      // (incoming) parameters from left to right; or nil
+	results    *Tuple      // (outgoing) results from left to right; or nil
+	variadic   bool        // true if the last parameter's type is of the form ...T (or string, for append built-in only)
+	typeParams []*TypeName // type paramters for signature; or nil
 }
 
 // NewSignature returns a new function type for the given receiver, parameters,
@@ -208,6 +241,10 @@ type Signature struct {
 // is variadic, it must have at least one parameter, and the last parameter
 // must be of unnamed slice type.
 func NewSignature(scope *Scope, recv *Var, params, results *Tuple, variadic bool) *Signature {
+	return NewGenericSignature(scope, recv, nil, params, results, variadic)
+}
+
+func NewGenericSignature(scope *Scope, recv *Var, typeParams []*TypeName, params, results *Tuple, variadic bool) *Signature {
 	// TODO(gri) Should we rely on the correct (non-nil) incoming scope
 	//           or should this function allocate and populate a scope?
 	if variadic {
@@ -219,7 +256,7 @@ func NewSignature(scope *Scope, recv *Var, params, results *Tuple, variadic bool
 			panic("types.NewSignature: variadic parameter must be of unnamed slice type")
 		}
 	}
-	return &Signature{scope, recv, params, results, variadic}
+	return &Signature{scope, recv, params, results, variadic, typeParams}
 }
 
 // Recv returns the receiver of signature s (if a method), or nil if a
@@ -239,12 +276,15 @@ func (s *Signature) Results() *Tuple { return s.results }
 // Variadic reports whether the signature s is variadic.
 func (s *Signature) Variadic() bool { return s.variadic }
 
+func (s *Signature) TypeParams() []*TypeName { return s.typeParams }
+
 // An Interface represents an interface type.
 type Interface struct {
 	methods   []*Func  // ordered list of explicitly declared methods
 	embeddeds []*Named // ordered list of explicitly embedded types
 
 	allMethods []*Func // ordered list of methods declared with or embedded in this interface (TODO(gri): replace with mset)
+	variance   ast.Variance
 }
 
 // NewInterface returns a new interface for the given methods and embedded types.
@@ -381,6 +421,8 @@ type Named struct {
 	obj        *TypeName // corresponding declared object
 	underlying Type      // possibly a *Named during setup; never a *Named once set up completely
 	methods    []*Func   // methods declared for this type (not the method set of this type)
+	context    Type
+	variance   ast.Variance
 }
 
 // NewNamed returns a new named type for the given type name, underlying type, and associated methods.
@@ -427,26 +469,28 @@ func (t *Named) AddMethod(m *Func) {
 
 // Implementations for Type methods.
 
-func (t *Basic) Underlying() Type     { return t }
-func (t *Array) Underlying() Type     { return t }
-func (t *Slice) Underlying() Type     { return t }
-func (t *Struct) Underlying() Type    { return t }
-func (t *Pointer) Underlying() Type   { return t }
-func (t *Tuple) Underlying() Type     { return t }
-func (t *Signature) Underlying() Type { return t }
-func (t *Interface) Underlying() Type { return t }
-func (t *Map) Underlying() Type       { return t }
-func (t *Chan) Underlying() Type      { return t }
-func (t *Named) Underlying() Type     { return t.underlying }
+func (t *Basic) Underlying() Type         { return t }
+func (t *Array) Underlying() Type         { return t }
+func (t *Slice) Underlying() Type         { return t }
+func (t *Struct) Underlying() Type        { return t }
+func (t *Pointer) Underlying() Type       { return t }
+func (t *Tuple) Underlying() Type         { return t }
+func (t *Signature) Underlying() Type     { return t }
+func (t *Interface) Underlying() Type     { return t }
+func (t *Map) Underlying() Type           { return t }
+func (t *Chan) Underlying() Type          { return t }
+func (t *Named) Underlying() Type         { return t.underlying }
+func (t *TypeParameter) Underlying() Type { return t.bound }
 
-func (t *Basic) String() string     { return TypeString(nil, t) }
-func (t *Array) String() string     { return TypeString(nil, t) }
-func (t *Slice) String() string     { return TypeString(nil, t) }
-func (t *Struct) String() string    { return TypeString(nil, t) }
-func (t *Pointer) String() string   { return TypeString(nil, t) }
-func (t *Tuple) String() string     { return TypeString(nil, t) }
-func (t *Signature) String() string { return TypeString(nil, t) }
-func (t *Interface) String() string { return TypeString(nil, t) }
-func (t *Map) String() string       { return TypeString(nil, t) }
-func (t *Chan) String() string      { return TypeString(nil, t) }
-func (t *Named) String() string     { return TypeString(nil, t) }
+func (t *Basic) String() string         { return TypeString(nil, t) }
+func (t *Array) String() string         { return TypeString(nil, t) }
+func (t *Slice) String() string         { return TypeString(nil, t) }
+func (t *Struct) String() string        { return TypeString(nil, t) }
+func (t *Pointer) String() string       { return TypeString(nil, t) }
+func (t *Tuple) String() string         { return TypeString(nil, t) }
+func (t *Signature) String() string     { return TypeString(nil, t) }
+func (t *Interface) String() string     { return TypeString(nil, t) }
+func (t *Map) String() string           { return TypeString(nil, t) }
+func (t *Chan) String() string          { return TypeString(nil, t) }
+func (t *Named) String() string         { return TypeString(nil, t) }
+func (t *TypeParameter) String() string { return TypeString(nil, t) }

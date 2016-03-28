@@ -15,7 +15,7 @@ package irgen
 
 import (
 	"fmt"
-	"go/ast"
+	"llvm.org/llgo/third_party/gc/go/ast"
 	"llvm.org/llvm/bindings/go/llvm"
 	"strings"
 )

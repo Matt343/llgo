@@ -189,10 +189,10 @@ package loader
 import (
 	"errors"
 	"fmt"
-	"go/ast"
 	"go/build"
-	"go/parser"
 	"go/token"
+	"llvm.org/llgo/third_party/gc/go/ast"
+	"llvm.org/llgo/third_party/gc/go/parser"
 	"os"
 	"sort"
 	"strings"

@@ -15,8 +15,8 @@ package irgen
 
 import (
 	"bytes"
-	"go/ast"
 	"go/token"
+	"llvm.org/llgo/third_party/gc/go/ast"
 	"log"
 	"sort"
 	"strconv"
@@ -183,6 +183,7 @@ func (opts *CompilerOptions) MakeImporter() error {
 }
 
 func (compiler *compiler) compile(fset *token.FileSet, astFiles []*ast.File, importpath string) (m *Module, err error) {
+	var _ ast.TypeParameter
 	buildctx, err := llgobuild.ContextFromTriple(compiler.TargetTriple)
 	if err != nil {
 		return nil, err

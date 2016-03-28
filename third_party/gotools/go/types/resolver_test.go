@@ -6,8 +6,8 @@ package types_test
 
 import (
 	"fmt"
-	"go/ast"
-	"go/parser"
+	"llvm.org/llgo/third_party/gc/go/ast"
+	"llvm.org/llgo/third_party/gc/go/parser"
 	"go/token"
 	"sort"
 	"testing"
@@ -39,7 +39,7 @@ var sources = []string{
 	`,
 	`
 	package p
-	import . "go/parser"
+	import . "llvm.org/llgo/third_party/gc/go/parser"
 	import "sync"
 	func h() Mode { return ImportsOnly }
 	var _, x int = 1, 2

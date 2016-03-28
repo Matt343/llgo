@@ -10,7 +10,7 @@ package ssa_test
 // Run with "go test -cpu=8 to" set GOMAXPROCS.
 
 import (
-	"go/ast"
+	"llvm.org/llgo/third_party/gc/go/ast"
 	"go/build"
 	"go/token"
 	"runtime"

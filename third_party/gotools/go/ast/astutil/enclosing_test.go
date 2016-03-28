@@ -12,8 +12,8 @@ package astutil_test
 import (
 	"bytes"
 	"fmt"
-	"go/ast"
-	"go/parser"
+	"llvm.org/llgo/third_party/gc/go/ast"
+	"llvm.org/llgo/third_party/gc/go/parser"
 	"go/token"
 	"strings"
 	"testing"

@@ -7,8 +7,8 @@
 package types
 
 import (
-	"go/ast"
 	"go/token"
+	"llvm.org/llgo/third_party/gc/go/ast"
 )
 
 func (check *Checker) call(x *operand, e *ast.CallExpr) exprKind {
@@ -61,6 +61,11 @@ func (check *Checker) call(x *operand, e *ast.CallExpr) exprKind {
 			return statement
 		}
 
+		typeAliases := make(TypeAliases)
+		if e.TypeArgs != nil && len(e.TypeArgs) > 0 {
+			check.typeArguments(e, sig, &typeAliases)
+		}
+
 		arg, n, _ := unpack(func(x *operand, i int) { check.expr(x, e.Args[i]) }, len(e.Args), false)
 		if arg == nil {
 			x.mode = invalid
@@ -68,7 +73,7 @@ func (check *Checker) call(x *operand, e *ast.CallExpr) exprKind {
 			return statement
 		}
 
-		check.arguments(x, e, sig, arg, n)
+		check.arguments(x, e, sig, arg, n, &typeAliases)
 
 		// determine result
 		switch sig.results.Len() {
@@ -76,10 +81,12 @@ func (check *Checker) call(x *operand, e *ast.CallExpr) exprKind {
 			x.mode = novalue
 		case 1:
 			x.mode = value
-			x.typ = sig.results.vars[0].typ // unpack tuple
+			t := sig.results.vars[0].typ // unpack tuple
+			x.typ = check.substituteTypes(sig, t, x.typ, &typeAliases, nil)
 		default:
 			x.mode = value
-			x.typ = sig.results
+			argResults, _ := x.typ.(*Tuple)
+			x.typ = check.substituteTypesTuple(sig, sig.results, argResults, &typeAliases, nil)
 		}
 		x.expr = e
 		check.hasCallOrRecv = true
@@ -87,6 +94,8 @@ func (check *Checker) call(x *operand, e *ast.CallExpr) exprKind {
 		return statement
 	}
 }
+
+type TypeAliases map[*TypeName]Type
 
 // use type-checks each argument.
 // Useful to make sure expressions are evaluated
@@ -178,7 +187,7 @@ func unpack(get getter, n int, allowCommaOk bool) (getter, int, bool) {
 
 // arguments checks argument passing for the call with the given signature.
 // The arg function provides the operand for the i'th argument.
-func (check *Checker) arguments(x *operand, call *ast.CallExpr, sig *Signature, arg getter, n int) {
+func (check *Checker) arguments(x *operand, call *ast.CallExpr, sig *Signature, arg getter, n int, aliases *TypeAliases) {
 	if call.Ellipsis.IsValid() {
 		// last argument is of the form x...
 		if len(call.Args) == 1 && n > 1 {
@@ -202,7 +211,7 @@ func (check *Checker) arguments(x *operand, call *ast.CallExpr, sig *Signature, 
 			if i == n-1 && call.Ellipsis.IsValid() {
 				ellipsis = call.Ellipsis
 			}
-			check.argument(sig, i, x, ellipsis)
+			check.argument(sig, i, x, ellipsis, aliases)
 		}
 	}
 
@@ -220,7 +229,7 @@ func (check *Checker) arguments(x *operand, call *ast.CallExpr, sig *Signature, 
 
 // argument checks passing of argument x to the i'th parameter of the given signature.
 // If ellipsis is valid, the argument is followed by ... at that position in the call.
-func (check *Checker) argument(sig *Signature, i int, x *operand, ellipsis token.Pos) {
+func (check *Checker) argument(sig *Signature, i int, x *operand, ellipsis token.Pos, aliases *TypeAliases) {
 	n := sig.params.Len()
 
 	// determine parameter type
@@ -261,9 +270,33 @@ func (check *Checker) argument(sig *Signature, i int, x *operand, ellipsis token
 		typ = typ.(*Slice).elem
 	}
 
-	if !check.assignment(x, typ) && x.mode != invalid {
-		check.errorf(x.pos(), "cannot pass argument %s to parameter of type %s", x, typ)
+	sub := check.substituteTypes(sig, typ, x.typ, aliases, nil)
+	if !check.assignment(x, sub) && x.mode != invalid {
+		check.errorf(x.pos(), "cannot pass argument %s to parameter of type %s", x, sub)
 	}
+}
+
+func (check *Checker) typeArguments(call *ast.CallExpr, sig *Signature, aliases *TypeAliases) {
+	sigParams := sig.TypeParams()
+	if sigParams == nil || len(sigParams) == 0 {
+		check.errorf(call.Lbrack, "function with signature %s does not accept type parameters", sig)
+		return
+	}
+	if len(call.TypeArgs) != len(sigParams) {
+		check.errorf(call.Rbrack, "wrong number of type arguments in call to %s", call.Fun)
+		return
+	}
+	for i, arg := range call.TypeArgs {
+		typeParam := sigParams[i]
+		var argType operand
+		check.exprOrType(&argType, arg)
+		if !argType.assignableTo(check.conf, typeParam.typ.Underlying()) {
+			check.errorf(arg.Pos(), "cannot use %s as %s in %s", arg, typeParam, call.Fun)
+		}
+		(*aliases)[typeParam] = argType.typ
+	}
+
+	return
 }
 
 func (check *Checker) selector(x *operand, e *ast.SelectorExpr) {
@@ -363,11 +396,13 @@ func (check *Checker) selector(x *operand, e *ast.SelectorExpr) {
 			params = sig.params.vars
 		}
 		x.mode = value
-		x.typ = &Signature{
-			params:   NewTuple(append([]*Var{NewVar(token.NoPos, check.pkg, "", x.typ)}, params...)...),
-			results:  sig.results,
-			variadic: sig.variadic,
-		}
+		x.typ = NewSignature(
+			nil,
+			nil,
+			NewTuple(append([]*Var{NewVar(token.NoPos, check.pkg, "", x.typ)}, params...)...),
+			sig.results,
+			sig.variadic,
+		)
 
 		check.addDeclDep(m)
 

@@ -7,8 +7,8 @@ package types_test
 import (
 	"flag"
 	"fmt"
-	"go/ast"
-	"go/parser"
+	"llvm.org/llgo/third_party/gc/go/ast"
+	"llvm.org/llgo/third_party/gc/go/parser"
 	"go/token"
 	"path/filepath"
 	"testing"
@@ -27,7 +27,7 @@ func TestSelf(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, err = Check("go/types", fset, files)
+	_, err = Check("llvm.org/llgo/third_party/gc/go/types", fset, files)
 	if err != nil {
 		// Importing go.tools/go/exact doensn't work in the
 		// build dashboard environment. Don't report an error

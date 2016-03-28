@@ -7,8 +7,8 @@
 package types
 
 import (
-	"go/ast"
 	"go/token"
+	"llvm.org/llgo/third_party/gc/go/ast"
 
 	"llvm.org/llgo/third_party/gotools/go/ast/astutil"
 	"llvm.org/llgo/third_party/gotools/go/exact"
@@ -126,7 +126,7 @@ func (check *Checker) builtin(x *operand, call *ast.CallExpr, id builtinId) (_ b
 				return
 			}
 			arg(x, i)
-		}, nargs)
+		}, nargs, nil)
 		// ok to continue even if check.arguments reported errors
 
 		x.mode = value

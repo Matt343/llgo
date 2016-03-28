@@ -31,8 +31,8 @@ package ssa
 
 import (
 	"fmt"
-	"go/ast"
 	"go/token"
+	"llvm.org/llgo/third_party/gc/go/ast"
 	"os"
 	"sync"
 	"sync/atomic"

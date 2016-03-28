@@ -29,9 +29,6 @@ type commonState struct {
 	ctrlCAborts       bool
 	r                 *bufio.Reader
 	tabStyle          TabStyle
-	multiLineMode     bool
-	cursorRows        int
-	maxRows           int
 }
 
 // TabStyle is used to select how tab completions are displayed.
@@ -208,11 +205,6 @@ type ModeApplier interface {
 // (and Prompt does not return) regardless of the value passed to SetCtrlCAborts.
 func (s *State) SetCtrlCAborts(aborts bool) {
 	s.ctrlCAborts = aborts
-}
-
-// SetMultiLineMode sets whether line is auto-wrapped. The default is false (single line).
-func (s *State) SetMultiLineMode(mlmode bool) {
-	s.multiLineMode = mlmode
 }
 
 func (s *State) promptUnsupported(p string) (string, error) {

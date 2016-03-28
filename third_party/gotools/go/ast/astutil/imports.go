@@ -7,7 +7,7 @@ package astutil // import "llvm.org/llgo/third_party/gotools/go/ast/astutil"
 
 import (
 	"fmt"
-	"go/ast"
+	"llvm.org/llgo/third_party/gc/go/ast"
 	"go/token"
 	"strconv"
 	"strings"

@@ -5,7 +5,7 @@
 package types
 
 import (
-	"go/ast"
+	"llvm.org/llgo/third_party/gc/go/ast"
 	"go/token"
 )
 

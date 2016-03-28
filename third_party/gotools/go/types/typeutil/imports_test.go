@@ -2,8 +2,8 @@ package typeutil_test
 
 import (
 	"fmt"
-	"go/ast"
-	"go/parser"
+	"llvm.org/llgo/third_party/gc/go/ast"
+	"llvm.org/llgo/third_party/gc/go/parser"
 	"go/token"
 	"testing"
 

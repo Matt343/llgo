@@ -67,7 +67,7 @@ func defPredeclaredTypes() {
 
 	// Error has a nil package in its qualified name since it is in no package
 	res := NewVar(token.NoPos, nil, "", Typ[String])
-	sig := &Signature{results: NewTuple(res)}
+	sig := NewSignature(nil, nil, nil, NewTuple(res), false)
 	err := NewFunc(token.NoPos, nil, "Error", sig)
 	typ := &Named{underlying: NewInterface([]*Func{err}, nil).Complete()}
 	sig.recv = NewVar(token.NoPos, nil, "", typ)

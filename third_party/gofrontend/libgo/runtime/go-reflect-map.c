@@ -151,6 +151,5 @@ extern _Bool ismapkey (const struct __go_type_descriptor *)
 _Bool
 ismapkey (const struct __go_type_descriptor *typ)
 {
-  return (typ != NULL
-	  && (void *) typ->__hashfn->fn != (void *) __go_type_hash_error);
+  return typ != NULL && typ->__hashfn != __go_type_hash_error;
 }

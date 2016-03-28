@@ -17,7 +17,6 @@ package irgen
 import (
 	"fmt"
 	"go/token"
-
 	"llvm.org/llgo/third_party/gotools/go/exact"
 	"llvm.org/llgo/third_party/gotools/go/types"
 	"llvm.org/llvm/bindings/go/llvm"
@@ -481,8 +480,20 @@ func (fr *frame) convert(v *govalue, dsttyp types.Type) *govalue {
 
 		// string -> []byte
 		if isSlice(dsttyp, types.Byte) {
-			sliceValue := fr.runtime.stringToByteArray.callOnly(fr, v.value)[0]
-			return newValue(sliceValue, origdsttyp)
+			value := v.value
+			strdata := fr.builder.CreateExtractValue(value, 0, "")
+			strlen := fr.builder.CreateExtractValue(value, 1, "")
+
+			// Data must be copied, to prevent changes in
+			// the byte slice from mutating the string.
+			newdata := fr.createMalloc(strlen)
+			fr.memcpy(newdata, strdata, strlen)
+
+			struct_ := llvm.Undef(fr.types.ToLLVM(dsttyp))
+			struct_ = fr.builder.CreateInsertValue(struct_, newdata, 0, "")
+			struct_ = fr.builder.CreateInsertValue(struct_, strlen, 1, "")
+			struct_ = fr.builder.CreateInsertValue(struct_, strlen, 2, "")
+			return newValue(struct_, origdsttyp)
 		}
 
 		// string -> []rune
@@ -493,10 +504,19 @@ func (fr *frame) convert(v *govalue, dsttyp types.Type) *govalue {
 
 	// []byte -> string
 	if isSlice(srctyp, types.Byte) && isString(dsttyp) {
-		data := fr.builder.CreateExtractValue(v.value, 0, "")
-		len := fr.builder.CreateExtractValue(v.value, 1, "")
-		stringValue := fr.runtime.byteArrayToString.callOnly(fr, data, len)[0]
-		return newValue(stringValue, dsttyp)
+		value := v.value
+		data := fr.builder.CreateExtractValue(value, 0, "")
+		len := fr.builder.CreateExtractValue(value, 1, "")
+
+		// Data must be copied, to prevent changes in
+		// the byte slice from mutating the string.
+		newdata := fr.createMalloc(len)
+		fr.memcpy(newdata, data, len)
+
+		struct_ := llvm.Undef(fr.types.ToLLVM(types.Typ[types.String]))
+		struct_ = fr.builder.CreateInsertValue(struct_, newdata, 0, "")
+		struct_ = fr.builder.CreateInsertValue(struct_, len, 1, "")
+		return newValue(struct_, types.Typ[types.String])
 	}
 
 	// []rune -> string

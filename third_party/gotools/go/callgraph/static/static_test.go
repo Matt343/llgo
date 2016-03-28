@@ -6,7 +6,7 @@ package static_test
 
 import (
 	"fmt"
-	"go/parser"
+	"llvm.org/llgo/third_party/gc/go/parser"
 	"reflect"
 	"sort"
 	"testing"

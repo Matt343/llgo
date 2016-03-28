@@ -198,6 +198,11 @@ func writeType(buf *bytes.Buffer, this *Package, typ Type, visited []Type) {
 		}
 		buf.WriteString(s)
 
+	case *TypeParameter:
+		buf.WriteString("type param { ")
+		writeType(buf, this, t.bound, visited)
+		buf.WriteString(" }")
+
 	default:
 		// For externally defined implementations of Type.
 		buf.WriteString(t.String())

@@ -7,8 +7,8 @@
 package types
 
 import (
-	"go/ast"
 	"go/token"
+	"llvm.org/llgo/third_party/gc/go/ast"
 	"sort"
 	"strconv"
 
@@ -143,10 +143,22 @@ func (check *Checker) typ(e ast.Expr) Type {
 
 // funcType type-checks a function or method type and returns its signature.
 func (check *Checker) funcType(sig *Signature, recvPar *ast.FieldList, ftyp *ast.FuncType) *Signature {
-	scope := NewScope(check.scope, "function")
+	parentScope := check.scope
+	if ftyp.TypeParams != nil {
+		parentScope = NewScope(check.scope, "function type parameters")
+		check.recordScope(ftyp.TypeParams, parentScope)
+	}
+
+	scope := NewScope(parentScope, "function")
 	check.recordScope(ftyp, scope)
 
 	recvList, _ := check.collectParams(scope, recvPar, false)
+	typeParams := make([]*TypeName, 0)
+	if ftyp.TypeParams != nil {
+		typeParams = check.collectTypeParams(sig, parentScope, ftyp.TypeParams)
+		check.scope = parentScope
+	}
+
 	params, variadic := check.collectParams(scope, ftyp.Params, true)
 	results, _ := check.collectParams(scope, ftyp.Results, false)
 
@@ -202,7 +214,12 @@ func (check *Checker) funcType(sig *Signature, recvPar *ast.FieldList, ftyp *ast
 	sig.scope = scope
 	sig.params = NewTuple(params...)
 	sig.results = NewTuple(results...)
+	sig.typeParams = typeParams
 	sig.variadic = variadic
+
+	if ftyp.TypeParams != nil {
+		check.scope = parentScope.Parent()
+	}
 
 	return sig
 }
@@ -440,6 +457,54 @@ func (check *Checker) collectParams(scope *Scope, list *ast.FieldList, variadicO
 		last.typ = &Slice{elem: last.typ}
 	}
 
+	return
+}
+
+func (check *Checker) collectTypeParams(sig *Signature, scope *Scope, list *ast.TypeParameterList) (params []*TypeName) {
+	if list == nil {
+		return
+	}
+
+	for _, field := range list.List {
+		ftype := field.TypeBound
+		if t, _ := ftype.(*ast.Ellipsis); t != nil {
+			check.invalidAST(field.Pos(), "... not permitted")
+			// ignore ... and continue
+		}
+		// typ := check.typ(ftype)
+		// The parser ensures that f.Tag is nil and we don't
+		// care if a constructed AST contains a non-nil tag.
+		if len(field.Names) > 0 {
+			// named parameter
+			for _, name := range field.Names {
+				if name.Name == "" {
+					check.invalidAST(name.Pos(), "anonymous type parameter")
+					// ok to continue
+				}
+
+				par := NewTypeName(name.Pos(), check.pkg, name.Name, nil)
+				check.typeDecl(par, ftype, nil, nil)
+				if named, _ := par.typ.(*Named); named != nil {
+					named.context = sig
+					named.variance = field.Variance
+				}
+
+				// bound := check.typ(ftype)
+				// typ := NewTypeParameter(bound, nil, field.Variance, sig)
+				// par := NewTypeName(name.Pos(), check.pkg, name.Name, typ)
+
+				// check.recordTypeAndValue(field, typexpr, typ, nil)
+
+				// // check.addMethodDecls(par)
+
+				check.declare(scope, name, par)
+				params = append(params, par)
+			}
+		} else {
+			// anonymous parameter
+			check.invalidAST(ftype.Pos(), "anonymous type parameter")
+		}
+	}
 	return
 }
 

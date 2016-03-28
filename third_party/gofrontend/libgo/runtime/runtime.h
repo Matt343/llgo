@@ -421,15 +421,17 @@ struct LFNode
 // Parallel for descriptor.
 struct ParFor
 {
-	const FuncVal *body;		// executed for each element
+	void (*body)(ParFor*, uint32);	// executed for each element
 	uint32 done;			// number of idle threads
 	uint32 nthr;			// total number of threads
 	uint32 nthrmax;			// maximum number of threads
 	uint32 thrseq;			// thread id sequencer
 	uint32 cnt;			// iteration space [0, cnt)
+	void *ctx;			// arbitrary user context
 	bool wait;			// if true, wait while all threads finish processing,
 					// otherwise parfor may return while other threads are still working
 	ParForThread *thr;		// array of thread descriptors
+	uint32 pad;			// to align ParForThread.pos for 64-bit atomic operations
 	// stats
 	uint64 nsteal;
 	uint64 nstealcnt;
@@ -507,9 +509,6 @@ extern	uint32	runtime_Hchansize;
 extern	DebugVars	runtime_debug;
 extern	uintptr	runtime_maxstacksize;
 
-extern	bool	runtime_isstarted;
-extern	bool	runtime_isarchive;
-
 /*
  * common functions and data
  */
@@ -542,7 +541,6 @@ void	runtime_schedinit(void);
 void	runtime_initsig(void);
 void	runtime_sigenable(uint32 sig);
 void	runtime_sigdisable(uint32 sig);
-void	runtime_sigignore(uint32 sig);
 int32	runtime_gotraceback(bool *crash);
 void	runtime_goroutineheader(G*);
 void	runtime_printtrace(Location*, int32, bool);
@@ -551,8 +549,8 @@ void	runtime_printtrace(Location*, int32, bool);
 #define runtime_write(d, v, n) write((d), (v), (n))
 #define runtime_close(d) close(d)
 void	runtime_ready(G*);
-String	runtime_getenv(const char*);
-int32	runtime_atoi(const byte*, intgo);
+const byte*	runtime_getenv(const char*);
+int32	runtime_atoi(const byte*);
 void*	runtime_mstart(void*);
 G*	runtime_malg(int32, byte**, size_t*);
 void	runtime_mpreinit(M*);
@@ -712,11 +710,12 @@ LFNode*	runtime_lfstackpop(uint64 *head);
  * Parallel for over [0, n).
  * body() is executed for each iteration.
  * nthr - total number of worker threads.
+ * ctx - arbitrary user context.
  * if wait=true, threads return from parfor() when all work is done;
  * otherwise, threads can return while other threads are still finishing processing.
  */
 ParFor*	runtime_parforalloc(uint32 nthrmax);
-void	runtime_parforsetup(ParFor *desc, uint32 nthr, uint32 n, bool wait, const FuncVal *body);
+void	runtime_parforsetup(ParFor *desc, uint32 nthr, uint32 n, void *ctx, bool wait, void (*body)(ParFor*, uint32));
 void	runtime_parfordo(ParFor *desc);
 void	runtime_parforiters(ParFor*, uintptr, uintptr*, uintptr*);
 
@@ -846,9 +845,3 @@ struct time_now_ret
 
 struct time_now_ret now() __asm__ (GOSYM_PREFIX "time.now")
   __attribute__ ((no_split_stack));
-
-extern void _cgo_wait_runtime_init_done (void);
-extern void _cgo_notify_runtime_init_done (void);
-extern _Bool runtime_iscgo;
-extern _Bool runtime_cgoHasExtraM;
-extern Hchan *runtime_main_init_done;

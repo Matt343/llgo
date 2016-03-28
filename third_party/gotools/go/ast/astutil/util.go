@@ -1,6 +1,6 @@
 package astutil
 
-import "go/ast"
+import "llvm.org/llgo/third_party/gc/go/ast"
 
 // Unparen returns e with any enclosing parentheses stripped.
 func Unparen(e ast.Expr) ast.Expr {

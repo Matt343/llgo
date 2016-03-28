@@ -15,7 +15,7 @@ package irgen
 
 import (
 	"fmt"
-	"go/ast"
+	"llvm.org/llgo/third_party/gc/go/ast"
 	"go/token"
 	"os"
 	"sort"
@@ -402,7 +402,7 @@ func (u *unit) defineFunction(f *ssa.Function) {
 	// an unwind block. We can short-circuit the check for defers with
 	// f.Recover != nil.
 	if f.Recover != nil || hasDefer(f) {
-		fr.unwindBlock = llvm.AddBasicBlock(fr.function, "unwind")
+		fr.unwindBlock = llvm.AddBasicBlock(fr.function, "")
 		fr.frameptr = fr.builder.CreateAlloca(llvm.Int8Type(), "")
 	}
 
@@ -432,7 +432,7 @@ func (u *unit) defineFunction(f *ssa.Function) {
 	fr.fixupPhis()
 
 	if !fr.unwindBlock.IsNil() {
-		fr.setupUnwindBlock(f.Recover)
+		fr.setupUnwindBlock(f.Recover, f.Signature.Results())
 	}
 
 	// The init function needs to register the GC roots first. We do this
@@ -623,12 +623,19 @@ func (fr *frame) runDefers() {
 	fr.runtime.undefer.invoke(fr, retrylpad, fr.frameptr)
 }
 
-func (fr *frame) setupUnwindBlock(rec *ssa.BasicBlock) {
-	var recoverbb llvm.BasicBlock
+func (fr *frame) setupUnwindBlock(rec *ssa.BasicBlock, results *types.Tuple) {
+	recoverbb := llvm.AddBasicBlock(fr.function, "")
 	if rec != nil {
-		recoverbb = fr.blocks[rec.Index]
+		fr.translateBlock(rec, recoverbb)
+	} else if results.Len() == 0 || results.At(0).Anonymous() {
+		// TODO(pcc): Remove this code after https://codereview.appspot.com/87210044/ lands
+		fr.builder.SetInsertPointAtEnd(recoverbb)
+		values := make([]llvm.Value, results.Len())
+		for i := range values {
+			values[i] = llvm.ConstNull(fr.llvmtypes.ToLLVM(results.At(i).Type()))
+		}
+		fr.retInf.encode(llvm.GlobalContext(), fr.allocaBuilder, fr.builder, values)
 	} else {
-		recoverbb = llvm.AddBasicBlock(fr.function, "recover")
 		fr.builder.SetInsertPointAtEnd(recoverbb)
 		fr.builder.CreateUnreachable()
 	}

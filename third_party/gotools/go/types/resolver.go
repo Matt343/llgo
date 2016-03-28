@@ -7,7 +7,7 @@ package types
 import (
 	"errors"
 	"fmt"
-	"go/ast"
+	"llvm.org/llgo/third_party/gc/go/ast"
 	"go/token"
 	pathLib "path"
 	"strconv"

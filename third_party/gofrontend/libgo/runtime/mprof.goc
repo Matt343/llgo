@@ -402,9 +402,10 @@ func ThreadCreateProfile(p Slice) (n int, ok bool) {
 }
 
 func Stack(b Slice, all bool) (n int) {
-	byte *pc;
-	bool enablegc = false;
+	byte *pc, *sp;
+	bool enablegc;
 	
+	sp = runtime_getcallersp(&b);
 	pc = (byte*)(uintptr)runtime_getcallerpc(&b);
 
 	if(all) {
@@ -422,6 +423,7 @@ func Stack(b Slice, all bool) (n int) {
 		g->writebuf = (byte*)b.__values;
 		g->writenbuf = b.__count;
 		USED(pc);
+		USED(sp);
 		runtime_goroutineheader(g);
 		runtime_traceback();
 		runtime_printcreatedby(g);

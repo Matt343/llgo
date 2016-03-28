@@ -5,7 +5,7 @@
 package ssautil_test
 
 import (
-	"go/parser"
+	"llvm.org/llgo/third_party/gc/go/parser"
 	"strings"
 	"testing"
 

@@ -5,7 +5,7 @@
 package types_test
 
 import (
-	"go/parser"
+	"llvm.org/llgo/third_party/gc/go/parser"
 	"testing"
 
 	. "llvm.org/llgo/third_party/gotools/go/types"

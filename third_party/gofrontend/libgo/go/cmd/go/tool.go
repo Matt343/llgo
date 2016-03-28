@@ -39,12 +39,6 @@ var (
 	toolN bool
 )
 
-// List of go tools found in the gccgo tool directory.
-// Other binaries could be in the same directory so don't
-// show those with the 'go tool' command.
-
-var gccgoTools = []string{"cgo", "fix", "cover", "godoc", "vet"}
-
 func init() {
 	cmdTool.Flag.BoolVar(&toolN, "n", false, "")
 }
@@ -55,9 +49,6 @@ func tool(toolName string) string {
 	toolPath := filepath.Join(toolDir, toolName)
 	if toolIsWindows {
 		toolPath += toolWindowsExtension
-	}
-	if len(buildToolExec) > 0 {
-		return toolPath
 	}
 	// Give a nice message if there is no tool with that name.
 	if _, err := os.Stat(toolPath); err != nil {
@@ -73,6 +64,10 @@ func tool(toolName string) string {
 }
 
 func isInGoToolsRepo(toolName string) bool {
+	switch toolName {
+	case "cover", "vet":
+		return true
+	}
 	return false
 }
 
@@ -97,11 +92,7 @@ func runTool(cmd *Command, args []string) {
 		return
 	}
 	if toolN {
-		cmd := toolPath
-		if len(args) > 1 {
-			cmd += " " + strings.Join(args[1:], " ")
-		}
-		fmt.Printf("%s\n", cmd)
+		fmt.Printf("%s %s\n", toolPath, strings.Join(args[1:], " "))
 		return
 	}
 	toolCmd := &exec.Cmd{
@@ -110,8 +101,6 @@ func runTool(cmd *Command, args []string) {
 		Stdin:  os.Stdin,
 		Stdout: os.Stdout,
 		Stderr: os.Stderr,
-		// Set $GOROOT, mainly for go tool dist.
-		Env: mergeEnvLists([]string{"GOROOT=" + goroot}, os.Environ()),
 	}
 	err := toolCmd.Run()
 	if err != nil {
@@ -152,21 +141,6 @@ func listTools() {
 		if toolIsWindows && strings.HasSuffix(name, toolWindowsExtension) {
 			name = name[:len(name)-len(toolWindowsExtension)]
 		}
-
-		// The tool directory used by gccgo will have other binaries
-		// in additions to go tools.  Only display go tools for this list.
-
-		if buildContext.Compiler == "gccgo" {
-			for _, tool := range gccgoTools {
-				if tool == name {
-					fmt.Println(name)
-				}
-			}
-		} else {
-
-			// Not gccgo, list all the tools found in this dir
-
-			fmt.Println(name)
-		}
+		fmt.Println(name)
 	}
 }

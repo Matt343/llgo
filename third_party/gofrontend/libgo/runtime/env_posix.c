@@ -11,7 +11,7 @@
 
 extern Slice envs;
 
-String
+const byte*
 runtime_getenv(const char *s)
 {
 	int32 i, j;
@@ -19,7 +19,6 @@ runtime_getenv(const char *s)
 	const byte *v, *bs;
 	String* envv;
 	int32 envc;
-	String ret;
 
 	bs = (const byte*)s;
 	len = runtime_findnull(bs);
@@ -34,12 +33,8 @@ runtime_getenv(const char *s)
 				goto nomatch;
 		if(v[len] != '=')
 			goto nomatch;
-		ret.str = v+len+1;
-		ret.len = envv[i].len-len-1;
-		return ret;
+		return v+len+1;
 	nomatch:;
 	}
-	ret.str = nil;
-	ret.len = 0;
-	return ret;
+	return nil;
 }
