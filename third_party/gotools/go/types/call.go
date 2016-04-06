@@ -278,7 +278,7 @@ func (check *Checker) argument(sig *Signature, i int, x *operand, ellipsis token
 
 func (check *Checker) typeArguments(call *ast.CallExpr, sig *Signature, aliases *TypeAliases) {
 	sigParams := sig.TypeParams()
-	if sigParams == nil || len(sigParams) == 0 {
+	if !sig.IsGeneric() {
 		check.errorf(call.Lbrack, "function with signature %s does not accept type parameters", sig)
 		return
 	}

@@ -278,6 +278,8 @@ func (s *Signature) Variadic() bool { return s.variadic }
 
 func (s *Signature) TypeParams() []*TypeName { return s.typeParams }
 
+func (s *Signature) IsGeneric() bool { return s.typeParams != nil && len(s.typeParams) > 0 }
+
 // An Interface represents an interface type.
 type Interface struct {
 	methods   []*Func  // ordered list of explicitly declared methods
