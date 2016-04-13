@@ -2,7 +2,112 @@ package types
 
 import "fmt"
 
-func (check *Checker) substituteTypes(context, typ Type, argTyp Type, aliases *TypeAliases, seen map[Type]Type) Type {
+// func EraseGenericSignature(sig *Signature) *Signature {
+// 	if sig == nil {
+// 		return nil
+// 	}
+
+// 	newRecv := sig.Recv.Type()
+// 	if ComplexRuntimeGeneric(sig.Recv.Type()) {
+// 		newRecv = new(Interface)
+// 	}
+// 	newParams := make([]
+// }
+
+func SimpleRuntimeGeneric(typ Type) bool {
+	named, _ := typ.(*Named)
+	return named != nil && named.context != nil
+}
+
+func ComplexRuntimeGeneric(typ Type) bool {
+	_, isNamed := typ.(*Named)
+	return RuntimeGeneric(typ) && !isNamed
+}
+
+func RuntimeGeneric(typ Type) bool {
+	if typ == nil {
+		return false
+	}
+
+	switch t := typ.(type) {
+	case *Array:
+		return t != nil && RuntimeGeneric(t.elem)
+	case *Slice:
+		return t != nil && RuntimeGeneric(t.elem)
+	case *Pointer:
+		return t != nil && RuntimeGeneric(t.base)
+	case *Map:
+		return t != nil && (RuntimeGeneric(t.key) || RuntimeGeneric(t.elem))
+	case *Chan:
+		return t != nil && RuntimeGeneric(t.elem)
+	case *Named:
+		return t != nil && t.context != nil
+	case *Tuple:
+		if t != nil && t.vars != nil {
+			for _, v := range t.vars {
+				if v != nil && RuntimeGeneric(v.Type()) {
+					return true
+				}
+			}
+		}
+	case *Signature:
+		if t != nil {
+			if RuntimeGeneric(t.params) || RuntimeGeneric(t.results) {
+				return true
+			}
+			if t.typeParams != nil {
+				for _, typeParam := range t.typeParams {
+					if typeParam != nil && RuntimeGeneric(typeParam.Type()) {
+						return true
+					}
+				}
+			}
+		}
+	case *Struct:
+		if t != nil {
+			if t.fields != nil {
+				for _, field := range t.fields {
+					if field != nil && RuntimeGeneric(field.Type()) {
+						return true
+					}
+				}
+			}
+			if t.typeParams != nil {
+				for _, typeParam := range t.typeParams {
+					if typeParam != nil && RuntimeGeneric(typeParam.Type()) {
+						return true
+					}
+				}
+			}
+		}
+	case *Interface:
+		if t != nil {
+			if t.methods != nil {
+				for _, method := range t.methods {
+					if method != nil && RuntimeGeneric(method.Type()) {
+						return true
+					}
+				}
+			}
+			if t.embeddeds != nil {
+				for _, embed := range t.embeddeds {
+					if embed != nil && RuntimeGeneric(embed.underlying) {
+						return true
+					}
+				}
+			}
+		}
+	default:
+		return false
+	}
+	return false
+}
+
+func SubstituteTypes(context, typ Type, argType Type, aliases *TypeAliases) Type {
+	return substituteTypes(context, typ, argType, aliases, make(map[Type]Type))
+}
+
+func substituteTypes(context, typ Type, argTyp Type, aliases *TypeAliases, seen map[Type]Type) Type {
 	if typ == nil {
 		return nil
 	}
@@ -22,14 +127,14 @@ func (check *Checker) substituteTypes(context, typ Type, argTyp Type, aliases *T
 		if argArray, ok := argTyp.(*Array); ok {
 			argElem = argArray.elem
 		}
-		sub = &Array{t.len, check.substituteTypes(context, t.elem, argElem, aliases, seen)}
+		sub = &Array{t.len, substituteTypes(context, t.elem, argElem, aliases, seen)}
 
 	case *Slice:
 		var argElem Type
 		if argSlice, ok := argTyp.(*Slice); ok {
 			argElem = argSlice.elem
 		}
-		sub = &Slice{check.substituteTypes(context, t.elem, argElem, aliases, seen)}
+		sub = &Slice{substituteTypes(context, t.elem, argElem, aliases, seen)}
 
 	case *Struct:
 		var argFields []*Var
@@ -39,10 +144,10 @@ func (check *Checker) substituteTypes(context, typ Type, argTyp Type, aliases *T
 			argTypeParams = argStruct.typeParams
 		}
 		sub = &Struct{
-			check.substituteTypesVars(context, t.fields, argFields, aliases, seen),
+			substituteTypesVars(context, t.fields, argFields, aliases, seen),
 			t.tags,
 			t.offsets,
-			check.substituteTypesTypeNames(context, t.typeParams, argTypeParams, aliases, seen),
+			substituteTypesTypeNames(context, t.typeParams, argTypeParams, aliases, seen),
 		}
 
 	case *Pointer:
@@ -50,14 +155,14 @@ func (check *Checker) substituteTypes(context, typ Type, argTyp Type, aliases *T
 		if argPointer, ok := argTyp.(*Pointer); ok {
 			argBase = argPointer.base
 		}
-		sub = &Pointer{check.substituteTypes(context, t.base, argBase, aliases, seen)}
+		sub = &Pointer{substituteTypes(context, t.base, argBase, aliases, seen)}
 
 	case *Tuple:
 		var argVars []*Var
 		if argTuple, ok := argTyp.(*Tuple); ok {
 			argVars = argTuple.vars
 		}
-		sub = &Tuple{check.substituteTypesVars(context, t.vars, argVars, aliases, seen)}
+		sub = &Tuple{substituteTypesVars(context, t.vars, argVars, aliases, seen)}
 
 	case *Signature:
 		var argParams *Tuple
@@ -71,10 +176,10 @@ func (check *Checker) substituteTypes(context, typ Type, argTyp Type, aliases *T
 		sub = &Signature{
 			t.scope,
 			t.recv,
-			check.substituteTypesTuple(context, t.params, argParams, aliases, seen),
-			check.substituteTypesTuple(context, t.results, argResults, aliases, seen),
+			substituteTypesTuple(context, t.params, argParams, aliases, seen),
+			substituteTypesTuple(context, t.results, argResults, aliases, seen),
 			t.variadic,
-			check.substituteTypesTypeNames(context, t.typeParams, argTypeParams, aliases, seen),
+			substituteTypesTypeNames(context, t.typeParams, argTypeParams, aliases, seen),
 		}
 
 	case *Interface:
@@ -87,9 +192,9 @@ func (check *Checker) substituteTypes(context, typ Type, argTyp Type, aliases *T
 			argAllMethods = argInterface.allMethods
 		}
 		sub = &Interface{
-			check.substituteTypesFuncs(context, t.methods, argMethods, aliases, seen),
-			check.substituteTypesNameds(context, t.embeddeds, argEmbeds, aliases, seen),
-			check.substituteTypesFuncs(context, t.allMethods, argAllMethods, aliases, seen),
+			substituteTypesFuncs(context, t.methods, argMethods, aliases, seen),
+			substituteTypesNameds(context, t.embeddeds, argEmbeds, aliases, seen),
+			substituteTypesFuncs(context, t.allMethods, argAllMethods, aliases, seen),
 			t.variance,
 		}
 
@@ -101,8 +206,8 @@ func (check *Checker) substituteTypes(context, typ Type, argTyp Type, aliases *T
 			argElem = argMap.elem
 		}
 		sub = &Map{
-			check.substituteTypes(context, t.key, argKey, aliases, seen),
-			check.substituteTypes(context, t.elem, argElem, aliases, seen),
+			substituteTypes(context, t.key, argKey, aliases, seen),
+			substituteTypes(context, t.elem, argElem, aliases, seen),
 		}
 
 	case *Chan:
@@ -110,10 +215,10 @@ func (check *Checker) substituteTypes(context, typ Type, argTyp Type, aliases *T
 		if argChan, ok := argTyp.(*Chan); ok {
 			argElem = argChan.elem
 		}
-		sub = &Chan{t.dir, check.substituteTypes(context, t.elem, argElem, aliases, seen)}
+		sub = &Chan{t.dir, substituteTypes(context, t.elem, argElem, aliases, seen)}
 
 	case *Named:
-		sub = check.substituteTypesNamed(context, t, argTyp, aliases, seen)
+		sub = substituteTypesNamed(context, t, argTyp, aliases, seen)
 
 	default:
 		sub = t
@@ -123,7 +228,7 @@ func (check *Checker) substituteTypes(context, typ Type, argTyp Type, aliases *T
 	return sub
 }
 
-func (check *Checker) substituteTypesNamed(context Type, old *Named, argTyp Type, aliases *TypeAliases, seen map[Type]Type) Type {
+func substituteTypesNamed(context Type, old *Named, argTyp Type, aliases *TypeAliases, seen map[Type]Type) Type {
 	if old == nil {
 		return nil
 	}
@@ -142,11 +247,11 @@ func (check *Checker) substituteTypesNamed(context Type, old *Named, argTyp Type
 	}
 }
 
-func (check *Checker) substituteTypesObject(context Type, old object, argObject object, aliases *TypeAliases, seen map[Type]Type) object {
-	return object{old.parent, old.pos, old.pkg, old.name, check.substituteTypes(context, old.typ, argObject.typ, aliases, seen), old.order_}
+func substituteTypesObject(context Type, old object, argObject object, aliases *TypeAliases, seen map[Type]Type) object {
+	return object{old.parent, old.pos, old.pkg, old.name, substituteTypes(context, old.typ, argObject.typ, aliases, seen), old.order_}
 }
 
-func (check *Checker) substituteTypesVar(context Type, old *Var, argVar *Var, aliases *TypeAliases, seen map[Type]Type) *Var {
+func substituteTypesVar(context Type, old *Var, argVar *Var, aliases *TypeAliases, seen map[Type]Type) *Var {
 	if old == nil {
 		return nil
 	}
@@ -154,10 +259,10 @@ func (check *Checker) substituteTypesVar(context Type, old *Var, argVar *Var, al
 	if argVar != nil {
 		argObject = argVar.object
 	}
-	return &Var{check.substituteTypesObject(context, old.object, argObject, aliases, seen), old.anonymous, old.visited, old.isField, old.used}
+	return &Var{substituteTypesObject(context, old.object, argObject, aliases, seen), old.anonymous, old.visited, old.isField, old.used}
 }
 
-func (check *Checker) substituteTypesFunc(context Type, old *Func, argFunc *Func, aliases *TypeAliases, seen map[Type]Type) *Func {
+func substituteTypesFunc(context Type, old *Func, argFunc *Func, aliases *TypeAliases, seen map[Type]Type) *Func {
 	if old == nil {
 		return nil
 	}
@@ -165,10 +270,10 @@ func (check *Checker) substituteTypesFunc(context Type, old *Func, argFunc *Func
 	if argFunc != nil {
 		argObject = argFunc.object
 	}
-	return &Func{check.substituteTypesObject(context, old.object, argObject, aliases, seen)}
+	return &Func{substituteTypesObject(context, old.object, argObject, aliases, seen)}
 }
 
-func (check *Checker) substituteTypesTypeName(context Type, old *TypeName, argTypeName *TypeName, aliases *TypeAliases, seen map[Type]Type) *TypeName {
+func substituteTypesTypeName(context Type, old *TypeName, argTypeName *TypeName, aliases *TypeAliases, seen map[Type]Type) *TypeName {
 	if old == nil {
 		return nil
 	}
@@ -176,10 +281,10 @@ func (check *Checker) substituteTypesTypeName(context Type, old *TypeName, argTy
 	if argTypeName != nil {
 		argObject = argTypeName.object
 	}
-	return &TypeName{check.substituteTypesObject(context, old.object, argObject, aliases, seen)}
+	return &TypeName{substituteTypesObject(context, old.object, argObject, aliases, seen)}
 }
 
-func (check *Checker) substituteTypesNameds(context Type, old []*Named, argNameds []*Named, aliases *TypeAliases, seen map[Type]Type) []*Named {
+func substituteTypesNameds(context Type, old []*Named, argNameds []*Named, aliases *TypeAliases, seen map[Type]Type) []*Named {
 	if old == nil {
 		return nil
 	}
@@ -189,12 +294,12 @@ func (check *Checker) substituteTypesNameds(context Type, old []*Named, argNamed
 		if argNameds != nil && i < len(argNameds) {
 			argNamed = argNameds[i]
 		}
-		nameds[i] = check.substituteTypesNamed(context, v, argNamed, aliases, seen).(*Named)
+		nameds[i] = substituteTypesNamed(context, v, argNamed, aliases, seen).(*Named)
 	}
 	return nameds
 }
 
-func (check *Checker) substituteTypesVars(context Type, old []*Var, argVars []*Var, aliases *TypeAliases, seen map[Type]Type) []*Var {
+func substituteTypesVars(context Type, old []*Var, argVars []*Var, aliases *TypeAliases, seen map[Type]Type) []*Var {
 	if old == nil {
 		return nil
 	}
@@ -204,12 +309,12 @@ func (check *Checker) substituteTypesVars(context Type, old []*Var, argVars []*V
 		if argVars != nil && i < len(argVars) {
 			argVar = argVars[i]
 		}
-		vars[i] = check.substituteTypesVar(context, v, argVar, aliases, seen)
+		vars[i] = substituteTypesVar(context, v, argVar, aliases, seen)
 	}
 	return vars
 }
 
-func (check *Checker) substituteTypesFuncs(context Type, old []*Func, argFuncs []*Func, aliases *TypeAliases, seen map[Type]Type) []*Func {
+func substituteTypesFuncs(context Type, old []*Func, argFuncs []*Func, aliases *TypeAliases, seen map[Type]Type) []*Func {
 	if old == nil {
 		return nil
 	}
@@ -219,12 +324,12 @@ func (check *Checker) substituteTypesFuncs(context Type, old []*Func, argFuncs [
 		if argFuncs != nil && i < len(argFuncs) {
 			argFunc = argFuncs[i]
 		}
-		funcs[i] = check.substituteTypesFunc(context, f, argFunc, aliases, seen)
+		funcs[i] = substituteTypesFunc(context, f, argFunc, aliases, seen)
 	}
 	return funcs
 }
 
-func (check *Checker) substituteTypesTypeNames(context Type, old []*TypeName, argTypeNames []*TypeName, aliases *TypeAliases, seen map[Type]Type) []*TypeName {
+func substituteTypesTypeNames(context Type, old []*TypeName, argTypeNames []*TypeName, aliases *TypeAliases, seen map[Type]Type) []*TypeName {
 	if old == nil {
 		return nil
 	}
@@ -234,12 +339,12 @@ func (check *Checker) substituteTypesTypeNames(context Type, old []*TypeName, ar
 		if argTypeNames != nil && i < len(argTypeNames) {
 			argTypeName = argTypeNames[i]
 		}
-		names[i] = check.substituteTypesTypeName(context, t, argTypeName, aliases, seen)
+		names[i] = substituteTypesTypeName(context, t, argTypeName, aliases, seen)
 	}
 	return names
 }
 
-func (check *Checker) substituteTypesTuple(context Type, old *Tuple, argTuple *Tuple, aliases *TypeAliases, seen map[Type]Type) *Tuple {
+func substituteTypesTuple(context Type, old *Tuple, argTuple *Tuple, aliases *TypeAliases, seen map[Type]Type) *Tuple {
 	if old == nil {
 		return nil
 	}
@@ -247,5 +352,5 @@ func (check *Checker) substituteTypesTuple(context Type, old *Tuple, argTuple *T
 	if argTuple != nil {
 		argVars = argTuple.vars
 	}
-	return &Tuple{check.substituteTypesVars(context, old.vars, argVars, aliases, seen)}
+	return &Tuple{substituteTypesVars(context, old.vars, argVars, aliases, seen)}
 }

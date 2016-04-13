@@ -167,6 +167,9 @@ func (f *Function) labelledBlock(label *ast.Ident) *lblock {
 // specified name, type and source position.
 //
 func (f *Function) addParam(name string, typ types.Type, pos token.Pos) *Parameter {
+	if types.ComplexRuntimeGeneric(typ) {
+		typ = new(types.Interface)
+	}
 	v := &Parameter{
 		name:   name,
 		typ:    typ,
@@ -194,7 +197,11 @@ func (f *Function) addParamObj(obj types.Object) *Parameter {
 func (f *Function) addSpilledParam(obj types.Object) {
 	param := f.addParamObj(obj)
 	spill := &Alloc{Comment: obj.Name()}
-	spill.setType(types.NewPointer(obj.Type()))
+	typ := obj.Type()
+	if types.ComplexRuntimeGeneric(typ) {
+		typ = new(types.Interface)
+	}
+	spill.setType(types.NewPointer(typ))
 	spill.setPos(obj.Pos())
 	f.objects[obj] = spill
 	f.Locals = append(f.Locals, spill)

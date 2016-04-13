@@ -82,11 +82,11 @@ func (check *Checker) call(x *operand, e *ast.CallExpr) exprKind {
 		case 1:
 			x.mode = value
 			t := sig.results.vars[0].typ // unpack tuple
-			x.typ = check.substituteTypes(sig, t, x.typ, &typeAliases, nil)
+			x.typ = SubstituteTypes(sig, t, x.typ, &typeAliases)
 		default:
 			x.mode = value
 			argResults, _ := x.typ.(*Tuple)
-			x.typ = check.substituteTypesTuple(sig, sig.results, argResults, &typeAliases, nil)
+			x.typ = substituteTypesTuple(sig, sig.results, argResults, &typeAliases, nil)
 		}
 		x.expr = e
 		check.hasCallOrRecv = true
@@ -270,7 +270,7 @@ func (check *Checker) argument(sig *Signature, i int, x *operand, ellipsis token
 		typ = typ.(*Slice).elem
 	}
 
-	sub := check.substituteTypes(sig, typ, x.typ, aliases, nil)
+	sub := SubstituteTypes(sig, typ, x.typ, aliases)
 	if !check.assignment(x, sub) && x.mode != invalid {
 		check.errorf(x.pos(), "cannot pass argument %s to parameter of type %s", x, sub)
 	}

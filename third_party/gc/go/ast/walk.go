@@ -415,3 +415,283 @@ func (f inspector) Visit(node Node) Visitor {
 func Inspect(node Node, f func(Node) bool) {
 	Walk(inspector(f), node)
 }
+
+
+
+type Transformer interface {
+	Transform(old, input Node) (output Node)
+}
+
+func walkTransformIdentList(v Transformer, list []*Ident) (output []*Ident){
+	for _, x := range list {
+		output = append(output, WalkTransform(v, x).(*Ident))
+	}
+	return
+}
+
+func walkTransformExprList(v Transformer, list []Expr) (output []Expr) {
+	for _, x := range list {
+		output = append(output, WalkTransform(v, x).(Expr))
+	}
+	return
+}
+
+func walkTransformStmtList(v Transformer, list []Stmt) (output []Stmt) {
+	for _, x := range list {
+		output = append(output, WalkTransform(v, x).(Stmt))
+	}
+	return
+}
+
+func walkTransformDeclList(v Transformer, list []Decl) (output []Decl) {
+	for _, x := range list {
+		output = append(output, WalkTransform(v, x).(Decl))
+	}
+	return
+}
+
+func walkTransformSpecList(v Transformer, list []Spec) (output []Spec) {
+	for _, x := range list {
+		output = append(output, WalkTransform(v, x).(Spec))
+	}
+	return
+}
+
+func WalkTransform(v Transformer, node Node) Node {
+	// walk children
+	// (the order of the cases matches the order
+	// of the corresponding node types in ast.go)
+	switch n := node.(type) {
+
+	case *Field:
+		newNames := walkTransformIdentList(v, n.Names)
+		newType := WalkTransform(v, n.Type).(Expr)
+		return v.Transform(n, &Field{n.Doc, newNames, newType, n.Tag, n.Comment})
+
+	case *FieldList:
+		newList := make([]*Field, 0)
+		for _, f := range n.List {
+			newList = append(newList, WalkTransform(v, f).(*Field))
+		}
+		return v.Transform(n, &FieldList{n.Opening, newList, n.Closing})
+
+	case *FuncLit:
+		return v.Transform(n, &FuncLit{n.Type, WalkTransform(v, n.Body).(*BlockStmt)})
+
+	case *CompositeLit:
+		newElts := walkTransformExprList(v, n.Elts)
+		return v.Transform(n, &CompositeLit{n.Type, n.Lbrace, newElts, n.Rbrace})
+
+	case *ParenExpr:
+		return v.Transform(n, &ParenExpr{n.Lparen, WalkTransform(v, n.X).(Expr), n.Rparen})
+
+	case *SelectorExpr:
+		newX := WalkTransform(v, n.X).(Expr)
+		newSel := WalkTransform(v, n.Sel).(*Ident)
+		return v.Transform(n, &SelectorExpr{newX, newSel})
+
+	case *IndexExpr:
+		newX := WalkTransform(v, n.X).(Expr)
+		newIndex := WalkTransform(v, n.Index).(Expr)
+		return v.Transform(n, &IndexExpr{newX, n.Lbrack, newIndex, n.Rbrack})
+
+	// case *SliceExpr:
+	// 	Walk(v, n.X)
+	// 	if n.Low != nil {
+	// 		Walk(v, n.Low)
+	// 	}
+	// 	if n.High != nil {
+	// 		Walk(v, n.High)
+	// 	}
+	// 	if n.Max != nil {
+	// 		Walk(v, n.Max)
+	// 	}
+
+	// case *TypeAssertExpr:
+	// 	Walk(v, n.X)
+	// 	if n.Type != nil {
+	// 		Walk(v, n.Type)
+	// 	}
+
+	// case *CallExpr:
+	// 	Walk(v, n.Fun)
+	// 	walkExprList(v, n.Args)
+
+	case *StarExpr:
+		return v.Transform(n, &StarExpr{n.Star, WalkTransform(v, n.X).(Expr)})
+
+	case *UnaryExpr:
+		return v.Transform(n, &UnaryExpr{n.OpPos, n.Op, WalkTransform(v, n.X).(Expr)})
+
+	case *BinaryExpr:
+		newX := WalkTransform(v, n.X).(Expr)
+		newY := WalkTransform(v, n.Y).(Expr)
+		return v.Transform(n, &BinaryExpr{newX, n.OpPos, n.Op, newY})
+
+	case *KeyValueExpr:
+		newKey := WalkTransform(v, n.Key).(Expr)
+		newValue := WalkTransform(v, n.Value).(Expr)
+		return v.Transform(n, &KeyValueExpr{newKey, n.Colon, newValue})
+
+	// Types
+	case *ArrayType, *StructType, *FuncType, *InterfaceType, *MapType, *ChanType:
+		return v.Transform(n, n)
+
+	// Statements
+	case *DeclStmt:
+		return v.Transform(n, &DeclStmt{WalkTransform(v, n.Decl).(Decl)})
+
+	case *LabeledStmt:
+		newLabel := WalkTransform(v, n.Label).(*Ident)
+		newStmt := WalkTransform(v, n.Stmt).(Stmt)
+		return v.Transform(n, &LabeledStmt{newLabel, n.Colon, newStmt})
+
+	case *ExprStmt:
+		return v.Transform(n, &ExprStmt{WalkTransform(v, n.X).(Expr)})
+
+	case *SendStmt:
+		newChan := WalkTransform(v, n.Chan).(Expr)
+		newValue := WalkTransform(v, n.Value).(Expr)
+		return v.Transform(n, &SendStmt{newChan, n.Arrow, newValue})
+
+	case *IncDecStmt:
+		return v.Transform(n, &IncDecStmt{WalkTransform(v, n.X).(Expr), n.TokPos, n.Tok})
+
+	case *AssignStmt:
+		newLhs := walkTransformExprList(v, n.Lhs)
+		newRhs := walkTransformExprList(v, n.Rhs)
+		return v.Transform(n, &AssignStmt{newLhs, n.TokPos, n.Tok, newRhs})
+
+	case *GoStmt:
+		return v.Transform(n, &GoStmt{n.Go, WalkTransform(v, n.Call).(*CallExpr)})
+
+	case *DeferStmt:
+		return v.Transform(n, &DeferStmt{n.Defer, WalkTransform(v, n.Call).(*CallExpr)})
+
+	case *ReturnStmt:
+		return v.Transform(n, &ReturnStmt{n.Return, walkTransformExprList(v, n.Results)})
+
+	case *BlockStmt:
+		return v.Transform(n, &BlockStmt{n.Lbrace, walkTransformStmtList(v, n.List), n.Rbrace})
+
+	case *IfStmt:
+		var newInit Stmt
+		if n.Init != nil {
+			newInit = WalkTransform(v, n.Init).(Stmt)
+		}
+		newCond := WalkTransform(v, n.Cond).(Expr)
+		newBody := WalkTransform(v, n.Body).(*BlockStmt)
+		var newElse Stmt
+		if n.Else != nil {
+			newElse = WalkTransform(v, n.Else).(Stmt)
+		}
+		return v.Transform(n, &IfStmt{n.If, newInit, newCond, newBody, newElse})
+
+	case *CaseClause:
+		newList := walkTransformExprList(v, n.List)
+		newBody := walkTransformStmtList(v, n.Body)
+		return v.Transform(n, &CaseClause{n.Case, newList, n.Colon, newBody})
+
+	case *SwitchStmt:
+		var newInit Stmt
+		if n.Init != nil {
+			newInit = WalkTransform(v, n.Init).(Stmt)
+		}
+		newBody := WalkTransform(v, n.Body).(*BlockStmt)
+		return v.Transform(n, &SwitchStmt{n.Switch, newInit, n.Tag, newBody})
+
+	case *TypeSwitchStmt:
+		var newInit Stmt
+		if n.Init != nil {
+			newInit = WalkTransform(v, n.Init).(Stmt)
+		}
+		newAssign := WalkTransform(v, n.Assign).(Stmt)
+		newBody := WalkTransform(v, n.Body).(*BlockStmt)
+		return v.Transform(n, &TypeSwitchStmt{n.Switch, newInit, newAssign, newBody})
+
+	case *CommClause:
+		var newComm Stmt
+		if n.Comm != nil {
+			newComm = WalkTransform(v, n.Comm).(Stmt)
+		}
+		newBody := walkTransformStmtList(v, n.Body)
+		return v.Transform(n, &CommClause{n.Case, newComm, n.Colon, newBody})
+
+	case *SelectStmt:
+		return v.Transform(n, &SelectStmt{n.Select, WalkTransform(v, n.Body).(*BlockStmt)})
+
+	case *ForStmt:
+		var newInit Stmt
+		if n.Init != nil {
+			newInit = WalkTransform(v, n.Init).(Stmt)
+		}
+		var newCond Expr
+		if n.Cond != nil {
+			newCond = WalkTransform(v, n.Cond).(Expr)
+		}
+		var newPost Stmt
+		if n.Post != nil {
+			newPost = WalkTransform(v, n.Post).(Stmt)
+		}
+		newBody := WalkTransform(v, n.Body).(*BlockStmt)
+		return v.Transform(n, &ForStmt{n.For, newInit, newCond, newPost, newBody})
+
+	case *RangeStmt:
+		var newKey, newValue Expr
+		if n.Key != nil {
+			newKey = WalkTransform(v, n.Key).(Expr)
+		}
+		if n.Value != nil {
+			newValue = WalkTransform(v, n.Value).(Expr)
+		}
+		newX := WalkTransform(v, n.X).(Expr)
+		newBody := WalkTransform(v, n.Body).(*BlockStmt)
+		return v.Transform(n, &RangeStmt{n.For, newKey, newValue, n.TokPos, n.Tok, newX, newBody})
+
+	// Declarations
+
+	case *ValueSpec:
+		newNames := walkTransformIdentList(v, n.Names)
+		var newType Expr
+		if n.Type != nil {
+			newType = WalkTransform(v, n.Type).(Expr)
+		}
+		newValues := walkTransformExprList(v, n.Values)
+		return v.Transform(n, &ValueSpec{n.Doc, newNames, newType, newValues, n.Comment})
+
+	case *TypeSpec:
+		newType := WalkTransform(v, n.Type).(Expr)
+		return v.Transform(n, &TypeSpec{n.Doc, n.Name, newType, n.Comment})
+
+	case *GenDecl:
+		newSpecs := walkTransformSpecList(v, n.Specs)
+		return v.Transform(n, &GenDecl{n.Doc, n.TokPos, n.Tok, n.Lparen, newSpecs, n.Rparen})
+
+	case *FuncDecl:
+		var newRecv *FieldList
+		if n.Recv != nil {
+			newRecv = WalkTransform(v, n.Recv).(*FieldList)
+		}
+		newType := WalkTransform(v, n.Type).(*FuncType)
+		var newBody *BlockStmt
+		if n.Body != nil {
+			newBody = WalkTransform(v, n.Body).(*BlockStmt)
+		}
+		return v.Transform(n, &FuncDecl{n.Doc, newRecv, n.Name, newType, newBody})
+
+	// Files and packages
+	case *File:
+		newDecls := walkTransformDeclList(v, n.Decls)
+		return v.Transform(n, &File{n.Doc, n.Package, n.Name, newDecls, n.Scope, n.Imports, n.Unresolved, n.Comments})
+
+	case *Package:
+		newFiles := make(map[string]*File, 0)
+		for name, f := range n.Files {
+			newFiles[name] = WalkTransform(v, f).(*File)
+		}
+		return v.Transform(n, &Package{n.Name, n.Scope, n.Imports, newFiles})
+
+	default:
+		return v.Transform(n, n)
+	}
+}

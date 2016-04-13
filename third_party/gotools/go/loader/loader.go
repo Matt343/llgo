@@ -741,7 +741,14 @@ func (conf *Config) Load() (*Program, error) {
 		// so no cycle check is needed.
 		// addFiles loads dependencies in parallel.
 		imp.addFiles(info, files, false)
-		prog.Created = append(prog.Created, info)
+
+		newInfo := imp.newPackageInfo(path)
+		// Erase generics
+		newFiles := imp.eraseGenerics(info, files)
+
+		imp.addFiles(newInfo, newFiles, false)
+
+		prog.Created = append(prog.Created, newInfo)
 	}
 
 	// Create packages specified by conf.CreatePkgs.
@@ -1141,6 +1148,335 @@ func (imp *importer) addFiles(info *PackageInfo, files []*ast.File, cycleCheck b
 		fmt.Fprintf(os.Stderr, "%s: stop %q\n",
 			time.Since(imp.start), info.Pkg.Path())
 	}
+}
+
+type transformer func(ast.Node, ast.Node) ast.Node
+
+func (t transformer) Transform(old, input ast.Node) (ast.Node) {
+	return t(old, input)
+}
+
+func reflectValueOf(x ast.Expr) ast.Expr {
+	var call *ast.CallExpr
+	if typeAssert, _ := x.(*ast.TypeAssertExpr); typeAssert != nil {
+		call, _ = typeAssert.X.(*ast.CallExpr)
+	}
+
+	if call == nil {
+		call, _ = x.(*ast.CallExpr)
+	}
+
+	if call != nil {
+		if selector, _ := call.Fun.(*ast.SelectorExpr); selector != nil && call.Lparen == token.NoPos {
+			if selector.Sel.Name == "Interface" {
+				return selector.X
+			}
+		}
+	}
+
+
+	return &ast.CallExpr{
+		Fun: &ast.SelectorExpr{ast.NewIdent("reflect"), ast.NewIdent("ValueOf")},
+		Args: []ast.Expr{x},
+	}
+}
+
+func reflectTypeOf(x ast.Expr) *ast.CallExpr {
+	return &ast.CallExpr{
+		Fun: &ast.SelectorExpr{ast.NewIdent("reflect"), ast.NewIdent("TypeOf")},
+		Args: []ast.Expr{x},
+	}
+}
+
+func reflectInterface(x ast.Expr) *ast.CallExpr {
+	return &ast.CallExpr{
+		Fun: &ast.SelectorExpr{x, ast.NewIdent("Interface")},
+	}
+}
+
+func typeAssert(x ast.Expr, typ types.Type) *ast.TypeAssertExpr {
+	return &ast.TypeAssertExpr{
+		X: x,
+		Type: typ.Ast(),
+	}
+}
+
+func (imp *importer) eraseGenerics(info *PackageInfo, files []*ast.File) (output []*ast.File) {
+	t := transformer(func(old, input ast.Node) ast.Node {
+		switch n := input.(type) {
+		case *ast.StarExpr:
+			// fmt.Printf("StarExpr in eraseGenerics: %s\n", typ)
+			if typ, ok := info.Types[old.(ast.Expr)]; ok && types.RuntimeGeneric(typ.Type) {
+				valueOf := reflectValueOf(n.X)
+
+				indirect := &ast.CallExpr{
+					Fun: &ast.SelectorExpr{ast.NewIdent("reflect"), ast.NewIdent("Indirect")},
+					Args: []ast.Expr{valueOf},
+				}
+
+				result := reflectInterface(indirect)
+
+				return typeAssert(result, typ.Type)
+			}
+			return n
+
+		case *ast.UnaryExpr:
+			if n.Op == token.AND {
+				if typ, ok := info.Types[old.(ast.Expr)]; ok && types.RuntimeGeneric(typ.Type) {
+					valueOf := reflectValueOf(n.X)
+					
+					addr := &ast.CallExpr{
+						Fun: &ast.SelectorExpr{valueOf, ast.NewIdent("Addr")},
+					}
+
+					return reflectInterface(addr)
+				}
+			}
+
+			return n
+
+		case *ast.IndexExpr:
+			oldX := old.(*ast.IndexExpr).X
+			if typ, ok := info.Types[oldX]; ok && types.RuntimeGeneric(typ.Type) {
+				// slice
+				if sliceType, _ := typ.Type.(*types.Slice); sliceType != nil {
+					valueOf := reflectValueOf(n.X)
+
+					index := &ast.CallExpr{
+						Fun: &ast.SelectorExpr{valueOf, ast.NewIdent("Index")},
+						Args: []ast.Expr{n.Index},
+					}
+
+					result := reflectInterface(index)
+
+					return typeAssert(result, sliceType.Elem())
+				}
+				// array
+				if arrayType, _ := typ.Type.(*types.Array); arrayType != nil {
+					valueOf := reflectValueOf(n.X)
+
+					index := &ast.CallExpr{
+						Fun: &ast.SelectorExpr{valueOf, ast.NewIdent("Index")},
+						Args: []ast.Expr{n.Index},
+					}
+
+					result := reflectInterface(index)
+					
+					return typeAssert(result, arrayType.Elem())
+				}
+				// map
+				if mapType, _ := typ.Type.(*types.Map); mapType != nil {
+					valueOf := reflectValueOf(n.X)
+					key := reflectValueOf(n.Index)
+
+					index := &ast.CallExpr{
+						Fun: &ast.SelectorExpr{valueOf, ast.NewIdent("MapIndex")},
+						Args: []ast.Expr{key},
+					}
+
+					result := reflectInterface(index)
+					
+					return typeAssert(result, mapType.Elem())
+				}
+			}
+			return n
+
+		case *ast.FuncType:
+			changed := false
+			newParams := n.Params
+			if n.Params != nil {
+				newFieldList := make([]*ast.Field, n.Params.NumFields())
+				for i, field := range n.Params.List {
+					fieldTyp := info.Types[field.Type].Type
+					if types.ComplexRuntimeGeneric(fieldTyp) {
+						newFieldList[i] = &ast.Field{
+							field.Doc,
+							field.Names,
+							&ast.InterfaceType{Interface: field.Type.Pos()},
+							field.Tag,
+							field.Comment,
+						}
+						changed = true
+					} else {
+						newFieldList[i] = field
+					}
+				}
+				newParams = &ast.FieldList{n.Params.Opening, newFieldList, n.Params.Closing}
+			}
+
+			newResults := n.Results
+			if n.Results != nil {
+				newFieldList := make([]*ast.Field, n.Results.NumFields())
+				for i, field := range n.Results.List {
+					fieldTyp := info.Types[field.Type].Type
+					if types.ComplexRuntimeGeneric(fieldTyp) {
+						newFieldList[i] = &ast.Field{
+							field.Doc,
+							field.Names,
+							&ast.InterfaceType{Interface: field.Type.Pos()},
+							field.Tag,
+							field.Comment,
+						}
+						changed = true
+					} else {
+						newFieldList[i] = field
+					}
+				}
+				newResults = &ast.FieldList{n.Results.Opening, newFieldList, n.Results.Closing}
+			}
+			if changed {
+				return &ast.FuncType{n.Func, n.TypeParams, newParams, newResults}
+			} else {
+				return n
+			}
+
+		case *ast.CallExpr:
+			// use reflect versions of builtin functions
+			if funName, _ := n.Fun.(*ast.Ident); funName != nil {
+				switch funName.Name {
+				case "cap":
+					if len(n.Args) > 0 {
+						arg := n.Args[0]
+						if types.ComplexRuntimeGeneric(info.Types[arg].Type) {
+							valueOf := reflectValueOf(arg)
+							return &ast.CallExpr{
+								Fun: &ast.SelectorExpr{valueOf, ast.NewIdent("Cap")},
+							}
+						}
+					}
+				case "close":
+					if len(n.Args) > 0 {
+						arg := n.Args[0]
+						if types.ComplexRuntimeGeneric(info.Types[arg].Type) {
+							valueOf := reflectValueOf(arg)
+							return &ast.CallExpr{
+								Fun: &ast.SelectorExpr{valueOf, ast.NewIdent("Close")},
+							}
+						}
+					}
+				case "copy":
+					if len(n.Args) > 1 {
+						src, dest := n.Args[0], n.Args[1]
+						srcType, destType := info.Types[src].Type, info.Types[dest].Type
+						if types.ComplexRuntimeGeneric(srcType) || types.ComplexRuntimeGeneric(destType) {
+							srcValue := reflectValueOf(src)
+							destValue := reflectValueOf(dest)
+							return &ast.CallExpr{
+								Fun: &ast.SelectorExpr{ast.NewIdent("reflect"), ast.NewIdent("Copy")},
+								Args: []ast.Expr{srcValue, destValue},
+							}
+						}
+					}
+				case "delete":
+					if len(n.Args) > 1 {
+						mapArg, key := n.Args[0], n.Args[1]
+						if types.ComplexRuntimeGeneric(info.Types[mapArg].Type) {
+							mapValue := reflectValueOf(mapArg)
+							keyValue := reflectValueOf(key)
+							zeroValue := &ast.CallExpr{
+								Fun: ast.NewIdent("new"),
+								Args: []ast.Expr{
+									&ast.SelectorExpr{ast.NewIdent("reflect"), ast.NewIdent("Value")},
+								},
+							}
+							return &ast.CallExpr{
+								Fun: &ast.SelectorExpr{mapValue, ast.NewIdent("SetMapIndex")},
+								Args: []ast.Expr{keyValue, zeroValue},
+							}
+						}
+					}
+				case "len":
+					if len(n.Args) > 0 {
+						arg := n.Args[0]
+						if types.ComplexRuntimeGeneric(info.Types[arg].Type) {
+							valueOf := reflectValueOf(arg)
+							return &ast.CallExpr{
+								Fun: &ast.SelectorExpr{valueOf, ast.NewIdent("Len")},
+							}
+						}
+					}
+				case "make":
+					if len(n.Args) > 0 {
+						resultType := info.Types[n].Type
+						if types.ComplexRuntimeGeneric(resultType) {
+							var reflectFunc string
+							
+							nilPointer := &ast.CallExpr{
+								Fun: &ast.ParenExpr{X: &ast.StarExpr{X: resultType.Ast()}},
+								Args: []ast.Expr{ast.NewIdent("nil")},
+							}
+							
+							typeOf := &ast.CallExpr{
+								Fun: &ast.SelectorExpr{reflectTypeOf(nilPointer), ast.NewIdent("Elem")},
+							}
+							
+							makeArgs := make([]ast.Expr, len(n.Args))
+							copy(makeArgs, n.Args)
+							makeArgs[0] = typeOf
+
+							switch resultType.(type) {
+							case *types.Chan:
+								reflectFunc = "MakeChan"
+							case *types.Map:
+								reflectFunc = "MakeMap"
+							case *types.Slice:
+								reflectFunc = "MakeSlice"
+								if len(makeArgs) == 2 {
+									makeArgs = append(makeArgs, makeArgs[1])
+								}
+							default:
+							}
+							result := &ast.CallExpr{
+								Fun: &ast.SelectorExpr{ast.NewIdent("reflect"), ast.NewIdent(reflectFunc)},
+								Args: makeArgs,
+							}
+							return reflectInterface(result)
+						}
+					}
+				case "new":
+					if len(n.Args) > 0 {
+						resultType := info.Types[n].Type
+						if types.ComplexRuntimeGeneric(resultType) {
+							nilPointer := &ast.CallExpr{
+								Fun: &ast.ParenExpr{X: resultType.Ast()},
+								Args: []ast.Expr{ast.NewIdent("nil")},
+							}
+							
+							typeOf := &ast.CallExpr{
+								Fun: &ast.SelectorExpr{reflectTypeOf(nilPointer), ast.NewIdent("Elem")},
+							}
+							
+							result := &ast.CallExpr{
+								Fun: &ast.SelectorExpr{ast.NewIdent("reflect"), ast.NewIdent("New")},
+								Args: []ast.Expr{typeOf},
+							}
+							return reflectInterface(result)
+						}
+					}
+
+				default:
+				}
+			}
+
+			// handle generic function results
+			if sig, ok := info.Types[n.Fun].Type.(*types.Signature); ok && types.ComplexRuntimeGeneric(sig) {
+				//TODO extend this to multiple return values
+				if sig.Results().Len() == 1 && types.ComplexRuntimeGeneric(sig.Results().At(0).Type()) {
+					return typeAssert(n, info.Types[n].Type)
+				}
+			}
+
+			return n
+
+		default:
+			return n
+		}
+	})
+
+	for _, file := range files {
+		output = append(output, ast.WalkTransform(t, file).(*ast.File))
+	}
+	return
 }
 
 func (imp *importer) newPackageInfo(path string) *PackageInfo {

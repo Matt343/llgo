@@ -5,8 +5,10 @@
 package types
 
 import (
+	"go/token"
 	"llvm.org/llgo/third_party/gc/go/ast"
 	"sort"
+	"strconv"
 )
 
 // TODO(gri) Revisit factory functions - make sure they have all relevant parameters.
@@ -19,6 +21,8 @@ type Type interface {
 
 	// String returns a string representation of a type.
 	String() string
+
+	Ast() ast.Expr
 }
 
 // BasicKind describes the kind of basic type.
@@ -95,6 +99,8 @@ func (b *Basic) Info() BasicInfo { return b.info }
 // Name returns the name of basic type b.
 func (b *Basic) Name() string { return b.name }
 
+func (b *Basic) Ast() ast.Expr { return ast.NewIdent(b.name) }
+
 // An Array represents an array type.
 type Array struct {
 	len  int64
@@ -110,6 +116,13 @@ func (a *Array) Len() int64 { return a.len }
 // Elem returns element type of array a.
 func (a *Array) Elem() Type { return a.elem }
 
+func (a *Array) Ast() ast.Expr {
+	return &ast.ArrayType{
+		Len: &ast.BasicLit{Kind: token.INT, Value: strconv.FormatInt(a.len, 10)},
+		Elt: a.elem.Ast(),
+	}
+}
+
 // A Slice represents a slice type.
 type Slice struct {
 	elem Type
@@ -121,24 +134,7 @@ func NewSlice(elem Type) *Slice { return &Slice{elem} }
 // Elem returns the element type of slice s.
 func (s *Slice) Elem() Type { return s.elem }
 
-// A GenericType is parameterized by one or more other types.
-type GenericType interface {
-	TypeParams() []*TypeParameter
-}
-
-type TypeParameter struct {
-	bound    Type         // type bound for this parameter
-	methods  []*Func      // methods declared for this type (not the method set of this type)
-	variance ast.Variance // variance of this type parameter.
-	context  Type         // the signature, struct, or interface that this is a parameter to
-}
-
-func NewTypeParameter(obj *TypeName, bound Type, methods []*Func, variance ast.Variance, context Type) *Named {
-	named := NewNamed(obj, bound, methods)
-	named.variance = variance
-	named.context = context
-	return named
-}
+func (s *Slice) Ast() ast.Expr { return &ast.ArrayType{Elt: s.elem.Ast()} }
 
 // A Struct represents a struct type.
 type Struct struct {
@@ -189,6 +185,28 @@ func (s *Struct) TypeParams() []*TypeName {
 	return s.typeParams
 }
 
+func (s *Struct) Ast() ast.Expr {
+	fields := make([]*ast.Field, len(s.fields))
+	for i, field := range s.fields {
+		fields[i] = &ast.Field{
+			Names: []*ast.Ident{ast.NewIdent(field.name)},
+			Type: field.typ.Ast(),
+			Tag: &ast.BasicLit{Kind: token.STRING, Value: s.Tag(i)},
+		}
+	}
+	typeParams := make([]*ast.TypeParameter, len(s.typeParams))
+	for i, typeParam := range s.typeParams {
+		typeParams[i] = &ast.TypeParameter{
+			Names: []*ast.Ident{ast.NewIdent(typeParam.name)},
+			TypeBound: typeParam.typ.Ast(),
+		}
+	}
+	return &ast.StructType{
+		Fields: &ast.FieldList{List: fields},
+		TypeParams: &ast.TypeParameterList{List: typeParams},
+	}
+}
+
 // A Pointer represents a pointer type.
 type Pointer struct {
 	base Type // element type
@@ -199,6 +217,8 @@ func NewPointer(elem Type) *Pointer { return &Pointer{base: elem} }
 
 // Elem returns the element type for the given pointer p.
 func (p *Pointer) Elem() Type { return p.base }
+
+func (p *Pointer) Ast() ast.Expr { return &ast.StarExpr{X: p.base.Ast()} }
 
 // A Tuple represents an ordered list of variables; a nil *Tuple is a valid (empty) tuple.
 // Tuples are used as components of signatures and to represent the type of multiple
@@ -225,6 +245,8 @@ func (t *Tuple) Len() int {
 
 // At returns the i'th variable of tuple t.
 func (t *Tuple) At(i int) *Var { return t.vars[i] }
+
+func (t *Tuple) Ast() ast.Expr { return nil }
 
 // A Signature represents a (non-builtin) function or method type.
 type Signature struct {
@@ -279,6 +301,39 @@ func (s *Signature) Variadic() bool { return s.variadic }
 func (s *Signature) TypeParams() []*TypeName { return s.typeParams }
 
 func (s *Signature) IsGeneric() bool { return s.typeParams != nil && len(s.typeParams) > 0 }
+
+func (s *Signature) Ast() ast.Expr {
+	params := make([]*ast.Field, s.params.Len())
+	if s.params != nil {
+		for i, param := range s.params.vars {
+			params[i] = &ast.Field{
+				Names: []*ast.Ident{ast.NewIdent(param.name)},
+				Type: param.typ.Ast(),
+			}
+		}
+	}
+	results := make([]*ast.Field, s.results.Len())
+	if s.results != nil {
+		for i, result := range s.params.vars {
+			results[i] = &ast.Field{
+				Names: []*ast.Ident{ast.NewIdent(result.name)},
+				Type: result.typ.Ast(),
+			}
+		}
+	}
+	typeParams := make([]*ast.TypeParameter, len(s.typeParams))
+	for i, typeParam := range s.typeParams {
+		typeParams[i] = &ast.TypeParameter{
+			Names: []*ast.Ident{ast.NewIdent(typeParam.name)},
+			TypeBound: typeParam.typ.Ast(),
+		}
+	}
+	return &ast.FuncType{
+		Params: &ast.FieldList{List: params},
+		Results: &ast.FieldList{List: results},
+		TypeParams: &ast.TypeParameterList{List: typeParams},
+	}
+}
 
 // An Interface represents an interface type.
 type Interface struct {
@@ -375,6 +430,24 @@ func (t *Interface) Complete() *Interface {
 	return t
 }
 
+func (t *Interface) Ast() ast.Expr {
+	fields := make([]*ast.Field, len(t.methods) + len(t.embeddeds))
+	for i, method := range t.methods {
+		fields[i] = &ast.Field{
+			Names: []*ast.Ident{ast.NewIdent(method.name)},
+			Type: method.typ.Ast(),
+		}
+	}
+	for i, embedded := range t.embeddeds {
+		fields[i + len(t.methods)] = &ast.Field{
+			Type: embedded.Ast(),
+		}
+	}
+	return &ast.InterfaceType{
+		Methods: &ast.FieldList{List: fields},
+	}
+}
+
 // A Map represents a map type.
 type Map struct {
 	key, elem Type
@@ -390,6 +463,8 @@ func (m *Map) Key() Type { return m.key }
 
 // Elem returns the element type of map m.
 func (m *Map) Elem() Type { return m.elem }
+
+func (m *Map) Ast() ast.Expr { return &ast.MapType{Key: m.key.Ast(), Value: m.elem.Ast()} }
 
 // A Chan represents a channel type.
 type Chan struct {
@@ -417,6 +492,19 @@ func (c *Chan) Dir() ChanDir { return c.dir }
 
 // Elem returns the element type of channel c.
 func (c *Chan) Elem() Type { return c.elem }
+
+func (c *Chan) Ast() ast.Expr {
+	dir := ast.SEND | ast.RECV
+	switch c.dir {
+	case SendRecv:
+		// nothing to do
+	case SendOnly:
+		dir = ast.SEND
+	case RecvOnly:
+		dir = ast.RECV
+	}
+	return &ast.ChanType{Dir: dir, Value: c.elem.Ast()}
+}
 
 // A Named represents a named type.
 type Named struct {
@@ -469,6 +557,8 @@ func (t *Named) AddMethod(m *Func) {
 	}
 }
 
+func (t *Named) Ast() ast.Expr { return ast.NewIdent(t.obj.name) }
+
 // Implementations for Type methods.
 
 func (t *Basic) Underlying() Type         { return t }
@@ -482,7 +572,6 @@ func (t *Interface) Underlying() Type     { return t }
 func (t *Map) Underlying() Type           { return t }
 func (t *Chan) Underlying() Type          { return t }
 func (t *Named) Underlying() Type         { return t.underlying }
-func (t *TypeParameter) Underlying() Type { return t.bound }
 
 func (t *Basic) String() string         { return TypeString(nil, t) }
 func (t *Array) String() string         { return TypeString(nil, t) }
@@ -495,4 +584,3 @@ func (t *Interface) String() string     { return TypeString(nil, t) }
 func (t *Map) String() string           { return TypeString(nil, t) }
 func (t *Chan) String() string          { return TypeString(nil, t) }
 func (t *Named) String() string         { return TypeString(nil, t) }
-func (t *TypeParameter) String() string { return TypeString(nil, t) }

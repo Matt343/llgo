@@ -179,12 +179,11 @@ func emitConv(f *Function, val Value, typ types.Type) Value {
 		return val
 	}
 
-	// if g_dst, ok := typ.(*Named); ok && g_dst.context != nil {
-	// 	typ = typ.Underlying()
-	// }
-	// if g_src, ok := t_src.(*Named); ok && g_src.context != nil {
-	// 	t_src = t_src.Underlying()
-	// }
+	if types.ComplexRuntimeGeneric(typ) {
+		mi := &MakeInterface{X: val}
+		mi.setType(new(types.Interface))
+		return f.emit(mi)
+	}
 
 	ut_dst := typ.Underlying()
 	ut_src := t_src.Underlying()

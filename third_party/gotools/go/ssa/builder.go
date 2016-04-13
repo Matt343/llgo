@@ -523,7 +523,7 @@ func (b *builder) expr(fn *Function, e ast.Expr) Value {
 	}
 
 	var v Value
-	if tv.Addressable() {
+	if tv.Addressable() && !types.RuntimeGeneric(tv.Type) {
 		// Prefer pointer arithmetic ({Index,Field}Addr) followed
 		// by Load over subelement extraction (e.g. Index, Field),
 		// to avoid large copies.
@@ -596,6 +596,13 @@ func (b *builder) expr0(fn *Function, e ast.Expr, tv types.TypeAndValue) Value {
 		// Regular function call.
 		var v Call
 		b.setCall(fn, e, &v.Call)
+		sig, _ := fn.Pkg.info.Types[e.Fun].Type.Underlying().(*types.Signature)
+		if sig != nil && sig.Results() != nil && types.SimpleRuntimeGeneric(sig.Results().At(0).Type()) {
+			v.setType(new(types.Interface))
+			f := fn.emit(&v)
+			return emitTypeAssert(fn, f, tv.Type, e.Lparen)
+		}
+
 		v.setType(tv.Type)
 		return fn.emit(&v)
 
