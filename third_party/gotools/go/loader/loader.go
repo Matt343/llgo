@@ -1468,6 +1468,51 @@ func (imp *importer) eraseGenerics(info *PackageInfo, files []*ast.File) (output
 
 			return n
 
+
+		case *ast.AssignStmt:
+			oldAssign := old.(*ast.AssignStmt)
+			if len(oldAssign.Lhs) == 1 {
+				lhs := oldAssign.Lhs[0]
+				replace := false
+				if index, _ := lhs.(*ast.IndexExpr); index != nil {
+					if typ := info.Types[index.X].Type; types.RuntimeGeneric(typ) {
+						if mapTyp, _ := typ.(*types.Map); mapTyp != nil {
+							mapIndexCall := reflectValueOf(n.Lhs[0]).(*ast.CallExpr)
+							mapValue := mapIndexCall.Fun.(*ast.SelectorExpr).X
+							key := mapIndexCall.Args[0]
+							value := reflectValueOf(n.Rhs[0])
+							return &ast.ExprStmt{
+								&ast.CallExpr{
+									Fun: &ast.SelectorExpr{mapValue, ast.NewIdent("SetMapIndex")},
+									Args: []ast.Expr{key, value},
+								},
+							}
+
+						}
+						replace = true
+					}
+				}
+
+				if star, _ := lhs.(*ast.StarExpr); star != nil {
+					if typ := info.Types[star.X].Type; types.RuntimeGeneric(typ) {
+						replace = true
+					}
+				}
+
+				if replace {
+					target := reflectValueOf(n.Lhs[0])
+					value := reflectValueOf(n.Rhs[0])
+					return &ast.ExprStmt{
+						&ast.CallExpr{
+							Fun: &ast.SelectorExpr{target, ast.NewIdent("Set")},
+							Args: []ast.Expr{value},
+						},
+					}
+				}
+			}
+
+			return n
+
 		default:
 			return n
 		}
