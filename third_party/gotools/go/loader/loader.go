@@ -1288,63 +1288,72 @@ func (imp *importer) eraseGenerics(info *PackageInfo, files []*ast.File) (output
 				}
 				return n
 
-			case *ast.FuncType:
-				changed := false
-				newParams := n.Params
-				if n.Params != nil {
-					newFieldList := make([]*ast.Field, len(n.Params.List))
-					for i, field := range n.Params.List {
-						fieldTyp := info.Types[field.Type].Type
-						if types.ComplexRuntimeGeneric(fieldTyp) {
-							newFieldList[i] = &ast.Field{
-								field.Doc,
-								field.Names,
-								&ast.InterfaceType{Interface: field.Type.Pos()},
-								field.Tag,
-								field.Comment,
-							}
-							changed = true
-						} else {
-							newFieldList[i] = field
+			case *ast.SliceExpr:
+				oldX := old.(*ast.SliceExpr).X
+				if typ, ok := info.Types[oldX]; ok && types.RuntimeGeneric(typ.Type) {
+					valueOf := reflectValueOf(n.X)
+					low := n.Low
+					if low == nil {
+						low = &ast.BasicLit{Kind: token.INT, Value: "0"}
+					}
+					high := n.High
+					if high == nil {
+						high = &ast.CallExpr{
+							Fun: &ast.SelectorExpr{valueOf, ast.NewIdent("Len")},
 						}
 					}
-					newParams = &ast.FieldList{n.Params.Opening, newFieldList, n.Params.Closing}
-				}
 
-				newResults := n.Results
-				if n.Results != nil {
-					newFieldList := make([]*ast.Field, len(n.Results.List))
-					for i, field := range n.Results.List {
-						fieldTyp := info.Types[field.Type].Type
-						if types.ComplexRuntimeGeneric(fieldTyp) {
-							newFieldList[i] = &ast.Field{
-								field.Doc,
-								field.Names,
-								&ast.InterfaceType{Interface: field.Type.Pos()},
-								field.Tag,
-								field.Comment,
-							}
-							changed = true
-						} else {
-							newFieldList[i] = field
+					if n.Slice3 {
+						slice := &ast.CallExpr{
+							Fun: &ast.SelectorExpr{valueOf, ast.NewIdent("Slice3")},
+							Args: []ast.Expr{low, high, n.Max},
 						}
+						return reflectInterface(slice)
+					} else {
+						slice := &ast.CallExpr{
+							Fun: &ast.SelectorExpr{valueOf, ast.NewIdent("Slice")},
+							Args: []ast.Expr{low, high},
+						}
+						return reflectInterface(slice)
 					}
-					newResults = &ast.FieldList{n.Results.Opening, newFieldList, n.Results.Closing}
 				}
-				if changed {
-					return &ast.FuncType{n.Func, n.TypeParams, newParams, newResults}
-				} else {
-					return n
-				}
+				return n
+
+			case *ast.FuncType:
+				return eraseGenericsSignature(old.(*ast.FuncType), n, info)
 
 			case *ast.CallExpr:
 				// use reflect versions of builtin functions
 				if funName, _ := n.Fun.(*ast.Ident); funName != nil {
+					oldCall := old.(*ast.CallExpr)
 					switch funName.Name {
+					case "append":
+						if len(n.Args) > 1 {
+							if types.ComplexRuntimeGeneric(info.Types[oldCall.Args[0]].Type) {
+								var appendFun *ast.Ident
+								args := make([]ast.Expr, len(n.Args))
+								for i, oldArg := range n.Args {
+									args[i] = reflectValueOf(oldArg)
+								}
+
+								if _, isSlice := info.Types[oldCall.Args[1]].Type.(*types.Slice); len(oldCall.Args) == 2 && isSlice {
+									appendFun = ast.NewIdent("AppendSlice")
+								} else {
+									appendFun = ast.NewIdent("Append")
+								}
+
+								result := &ast.CallExpr{
+									Fun: &ast.SelectorExpr{ast.NewIdent("reflect"), appendFun},
+									Args: args,
+								}
+								return reflectInterface(result)
+							}
+						}
+
 					case "cap":
 						if len(n.Args) > 0 {
 							arg := n.Args[0]
-							if types.ComplexRuntimeGeneric(info.Types[arg].Type) {
+							if types.ComplexRuntimeGeneric(info.Types[oldCall.Args[0]].Type) {
 								valueOf := reflectValueOf(arg)
 								return &ast.CallExpr{
 									Fun: &ast.SelectorExpr{valueOf, ast.NewIdent("Cap")},
@@ -1354,7 +1363,7 @@ func (imp *importer) eraseGenerics(info *PackageInfo, files []*ast.File) (output
 					case "close":
 						if len(n.Args) > 0 {
 							arg := n.Args[0]
-							if types.ComplexRuntimeGeneric(info.Types[arg].Type) {
+							if types.ComplexRuntimeGeneric(info.Types[oldCall.Args[0]].Type) {
 								valueOf := reflectValueOf(arg)
 								return &ast.CallExpr{
 									Fun: &ast.SelectorExpr{valueOf, ast.NewIdent("Close")},
@@ -1364,7 +1373,7 @@ func (imp *importer) eraseGenerics(info *PackageInfo, files []*ast.File) (output
 					case "copy":
 						if len(n.Args) > 1 {
 							src, dest := n.Args[0], n.Args[1]
-							srcType, destType := info.Types[src].Type, info.Types[dest].Type
+							srcType, destType := info.Types[oldCall.Args[0]].Type, info.Types[oldCall.Args[1]].Type
 							if types.ComplexRuntimeGeneric(srcType) || types.ComplexRuntimeGeneric(destType) {
 								srcValue := reflectValueOf(src)
 								destValue := reflectValueOf(dest)
@@ -1377,7 +1386,7 @@ func (imp *importer) eraseGenerics(info *PackageInfo, files []*ast.File) (output
 					case "delete":
 						if len(n.Args) > 1 {
 							mapArg, key := n.Args[0], n.Args[1]
-							if types.ComplexRuntimeGeneric(info.Types[mapArg].Type) {
+							if types.ComplexRuntimeGeneric(info.Types[oldCall.Args[0]].Type) {
 								mapValue := reflectValueOf(mapArg)
 								keyValue := reflectValueOf(key)
 								zeroValue := &ast.CallExpr{
@@ -1395,7 +1404,7 @@ func (imp *importer) eraseGenerics(info *PackageInfo, files []*ast.File) (output
 					case "len":
 						if len(n.Args) > 0 {
 							arg := n.Args[0]
-							if types.ComplexRuntimeGeneric(info.Types[arg].Type) {
+							if types.ComplexRuntimeGeneric(info.Types[oldCall.Args[0]].Type) {
 								valueOf := reflectValueOf(arg)
 								return &ast.CallExpr{
 									Fun: &ast.SelectorExpr{valueOf, ast.NewIdent("Len")},
@@ -1404,7 +1413,7 @@ func (imp *importer) eraseGenerics(info *PackageInfo, files []*ast.File) (output
 						}
 					case "make":
 						if len(n.Args) > 0 {
-							resultType := info.Types[n].Type
+							resultType := info.Types[oldCall].Type
 							if types.ComplexRuntimeGeneric(resultType) {
 								var reflectFunc string
 								
@@ -1442,7 +1451,7 @@ func (imp *importer) eraseGenerics(info *PackageInfo, files []*ast.File) (output
 						}
 					case "new":
 						if len(n.Args) > 0 {
-							resultType := info.Types[n].Type
+							resultType := info.Types[oldCall].Type
 							if types.ComplexRuntimeGeneric(resultType) {
 								nilPointer := &ast.CallExpr{
 									Fun: &ast.ParenExpr{X: resultType.Ast()},
@@ -1467,9 +1476,34 @@ func (imp *importer) eraseGenerics(info *PackageInfo, files []*ast.File) (output
 
 				// handle generic function results
 				if sig, ok := info.Types[n.Fun].Type.(*types.Signature); ok && types.ComplexRuntimeGeneric(sig) {
+
+					// newParams := make([]ast.Expr, len(n.Args))
+					// for i := 0; i < sig.Params().Len(); i++ {
+					// 	newParams[i] = n.Args[i]
+					// 	if fun, _ := sig.Params().At(i).(*types.Signature); fun != nil {
+					// 		if types.RuntimeGeneric(fun) {
+					// 			newSig := eraseGenericsSignature(old.(*ast.CallExpr).Args[i], n.Args[i], info)
+					// 			newArgs := make([]ast.Expr, fun.Args().Len())
+					// 			call := &ast.CallExpr{
+					// 				Fun: n.Args[i],
+					// 				TypeArgs: n.TypeArgs,
+					// 			}
+								
+					// 			newParams[i] = &ast.FuncLit{
+					// 				newSig,
+					// 				&ast.BlockStmt{
+					// 					List: []ast.Stmt{
+
+					// 					},
+					// 				},
+					// 			}
+					// 		}
+					// 	}
+					// }
+					
 					//TODO extend this to multiple return values
 					if sig.Results().Len() == 1 && types.ComplexRuntimeGeneric(sig.Results().At(0).Type()) {
-						return typeAssert(n, info.Types[n].Type)
+						return typeAssert(n, info.Types[old].Type)
 					}
 				}
 
@@ -1576,8 +1610,69 @@ func (imp *importer) eraseGenerics(info *PackageInfo, files []*ast.File) (output
 	return
 }
 
+func eraseGenericsSignature(old, n *ast.FuncType, info *PackageInfo) ast.Expr {
+	changed := false
+	newParams := n.Params
+	if n.Params != nil {
+		newFieldList := make([]*ast.Field, len(n.Params.List))
+		for i, field := range n.Params.List {
+			fieldTyp := info.Types[field.Type].Type
+			if types.ComplexRuntimeGeneric(fieldTyp) {
+				if sig, _ := fieldTyp.(*types.Signature); sig != nil {
+					newFieldList[i] = &ast.Field{
+						field.Doc,
+						field.Names,
+						eraseGenericsSignature(old.Params.List[i].Type.(*ast.FuncType), field.Type.(*ast.FuncType), info),
+						field.Tag,
+						field.Comment,
+					}
+				} else {
+					newFieldList[i] = &ast.Field{
+						field.Doc,
+						field.Names,
+						&ast.InterfaceType{Interface: field.Type.Pos()},
+						field.Tag,
+						field.Comment,
+					}
+				}
+				changed = true
+			} else {
+				newFieldList[i] = field
+			}
+		}
+		newParams = &ast.FieldList{n.Params.Opening, newFieldList, n.Params.Closing}
+	}
+
+	newResults := n.Results
+	if n.Results != nil {
+		newFieldList := make([]*ast.Field, len(n.Results.List))
+		for i, field := range n.Results.List {
+			fieldTyp := info.Types[field.Type].Type
+			if types.ComplexRuntimeGeneric(fieldTyp) {
+				newFieldList[i] = &ast.Field{
+					field.Doc,
+					field.Names,
+					&ast.InterfaceType{Interface: field.Type.Pos()},
+					field.Tag,
+					field.Comment,
+				}
+				changed = true
+			} else {
+				newFieldList[i] = field
+			}
+		}
+		newResults = &ast.FieldList{n.Results.Opening, newFieldList, n.Results.Closing}
+	}
+	if changed {
+		return &ast.FuncType{n.Func, n.TypeParams, newParams, newResults}
+	} else {
+		return n
+	}
+}
+
+
 func (imp *importer) newPackageInfo(path string) *PackageInfo {
-	pkg := types.NewPackage(path, "")
+pkg := types.NewPackage(path, "")
 	if imp.conf.PackageCreated != nil {
 		imp.conf.PackageCreated(pkg)
 	}

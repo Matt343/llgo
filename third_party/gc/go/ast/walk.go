@@ -517,9 +517,10 @@ func WalkTransformExpr(v Transformer, node Expr) Expr {
 	// 		Walk(v, n.Type)
 	// 	}
 
-	// case *CallExpr:
-	// 	Walk(v, n.Fun)
-	// 	walkExprList(v, n.Args)
+	case *CallExpr:
+		newFun := WalkTransformExpr(v, n.Fun)
+		newArgs := walkTransformExprList(v, n.Args)
+		return v.TransformExpr(n, &CallExpr{newFun, n.Lbrack, n.TypeArgs, n.Rbrack, n.Lparen, newArgs, n.Ellipsis, n.Rparen})
 
 	case *StarExpr:
 		return v.TransformExpr(n, &StarExpr{n.Star, WalkTransformExpr(v, n.X)})
